@@ -63,3 +63,21 @@ export async function deleteRoute(id: string): Promise<void> {
     const db = await getDB();
     await db.delete(ROUTES_STORE, id);
 }
+
+export async function updateLastBreadcrumb(
+    updater: (b: Breadcrumb) => Breadcrumb
+): Promise<Breadcrumb | null> {
+    const db = await getDB();
+    const tx = db.transaction(SESSION_STORE, 'readwrite');
+    const store = tx.objectStore(SESSION_STORE);
+    const session = (await store.get(CURRENT_SESSION_ID)) as Session | undefined;
+    if (!session || session.breadcrumbs.length === 0) {
+        return null;
+    }
+    const last = session.breadcrumbs[session.breadcrumbs.length - 1];
+    const updated = updater(last);
+    session.breadcrumbs[session.breadcrumbs.length - 1] = updated;
+    await store.put(session);
+    await tx.done;
+    return updated;
+}

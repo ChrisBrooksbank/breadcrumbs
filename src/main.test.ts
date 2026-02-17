@@ -9,6 +9,7 @@ import {
     mountNavigationView,
     switchToNavigationView,
     openSaveModal,
+    openLandmarkPicker,
     mountSavedRoutesView,
     _resetModalOpen,
     createOffCourseDetector,
@@ -1551,5 +1552,160 @@ describe('updateStationaryBadge', () => {
         const emptyRoot = document.createElement('div');
         // Should not throw even if #stationary-badge is not in DOM
         expect(() => updateStationaryBadge(emptyRoot, true)).not.toThrow();
+    });
+
+    it('shows "Paused" text and suspended class when isSuspended is true', () => {
+        updateStationaryBadge(root, true, true);
+        const badge = root.querySelector<HTMLElement>('#stationary-badge');
+        expect(badge?.hidden).toBe(false);
+        expect(badge?.textContent).toContain('Paused');
+        expect(badge?.classList.contains('stationary-badge--suspended')).toBe(true);
+    });
+
+    it('removes suspended class when isSuspended is false', () => {
+        updateStationaryBadge(root, true, true);
+        updateStationaryBadge(root, true, false);
+        const badge = root.querySelector<HTMLElement>('#stationary-badge');
+        expect(badge?.textContent).toContain('Stationary');
+        expect(badge?.classList.contains('stationary-badge--suspended')).toBe(false);
+    });
+});
+
+describe('App Shell has Mark landmark button', () => {
+    let root: HTMLElement;
+
+    beforeEach(() => {
+        root = document.createElement('div');
+        document.body.appendChild(root);
+        mountAppShell(root);
+        return () => {
+            document.body.removeChild(root);
+        };
+    });
+
+    it('renders the "Mark landmark" button', () => {
+        const btn = root.querySelector('#btn-mark-landmark');
+        expect(btn).not.toBeNull();
+        expect(btn?.textContent?.trim()).toBe('Mark landmark');
+    });
+
+    it('"Mark landmark" button is disabled by default', () => {
+        const btn = root.querySelector<HTMLButtonElement>('#btn-mark-landmark');
+        expect(btn?.disabled).toBe(true);
+    });
+
+    it('"Mark landmark" button has aria-label', () => {
+        const btn = root.querySelector('#btn-mark-landmark');
+        expect(btn?.getAttribute('aria-label')).toBeTruthy();
+    });
+});
+
+describe('openLandmarkPicker', () => {
+    afterEach(() => {
+        document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+        _resetModalOpen();
+    });
+
+    it('renders a landmark picker modal with preset buttons', () => {
+        openLandmarkPicker(vi.fn());
+        const backdrop = document.querySelector('.modal-backdrop');
+        expect(backdrop).not.toBeNull();
+        const presets = backdrop?.querySelectorAll('.landmark-btn');
+        expect(presets?.length).toBe(6);
+    });
+
+    it('calls onSelect with the preset label when clicked', () => {
+        const onSelect = vi.fn();
+        openLandmarkPicker(onSelect);
+        const gateBtn = document.querySelector<HTMLButtonElement>(
+            '.landmark-btn[data-label="Gate"]'
+        );
+        gateBtn?.click();
+        expect(onSelect).toHaveBeenCalledWith('Gate');
+    });
+
+    it('calls onSelect with custom text when OK is clicked', () => {
+        const onSelect = vi.fn();
+        openLandmarkPicker(onSelect);
+        const input = document.querySelector<HTMLInputElement>('#landmark-custom-input');
+        if (input) input.value = 'The big tree';
+        const okBtn = document.querySelector<HTMLButtonElement>('#btn-landmark-custom-confirm');
+        okBtn?.click();
+        expect(onSelect).toHaveBeenCalledWith('The big tree');
+    });
+
+    it('closes modal when Cancel is clicked', () => {
+        openLandmarkPicker(vi.fn());
+        const cancelBtn = document.querySelector<HTMLButtonElement>('#btn-landmark-cancel');
+        cancelBtn?.click();
+        expect(document.querySelector('.modal-backdrop')).toBeNull();
+    });
+
+    it('closes modal when Escape is pressed', () => {
+        openLandmarkPicker(vi.fn());
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        expect(document.querySelector('.modal-backdrop')).toBeNull();
+    });
+
+    it('closes modal when backdrop is clicked', () => {
+        openLandmarkPicker(vi.fn());
+        const backdrop = document.querySelector<HTMLElement>('.modal-backdrop');
+        backdrop?.click();
+        expect(document.querySelector('.modal-backdrop')).toBeNull();
+    });
+
+    it('does not call onSelect with empty custom text', () => {
+        const onSelect = vi.fn();
+        openLandmarkPicker(onSelect);
+        const okBtn = document.querySelector<HTMLButtonElement>('#btn-landmark-custom-confirm');
+        okBtn?.click();
+        expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('blocks second picker while one is open', () => {
+        openLandmarkPicker(vi.fn());
+        openLandmarkPicker(vi.fn());
+        const backdrops = document.querySelectorAll('.modal-backdrop');
+        expect(backdrops.length).toBe(1);
+    });
+});
+
+describe('Route card landmark count', () => {
+    let root: HTMLElement;
+    const onBack = vi.fn();
+
+    beforeEach(async () => {
+        root = document.createElement('div');
+        root.id = 'app';
+        document.body.appendChild(root);
+        const existing = await listRoutes();
+        for (const r of existing) {
+            await deleteRoute(r.id);
+        }
+        return () => {
+            document.body.removeChild(root);
+        };
+    });
+
+    it('shows landmark count when route has landmarks', async () => {
+        await saveRoute({
+            id: 'landmark-route',
+            name: 'Landmark walk',
+            date: Date.now(),
+            distance: 500,
+            breadcrumbCount: 5,
+            breadcrumbs: [
+                { lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000, label: 'Gate' },
+                { lat: 51.501, lng: -0.1, accuracy: 5, timestamp: 2000 },
+                { lat: 51.502, lng: -0.1, accuracy: 5, timestamp: 3000, label: 'Bench' },
+            ],
+            landmarkCount: 2,
+        });
+
+        mountSavedRoutesView(root, onBack);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const meta = root.querySelector('.route-card__meta');
+        expect(meta?.textContent).toContain('2 landmarks');
     });
 });

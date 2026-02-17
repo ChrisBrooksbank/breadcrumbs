@@ -693,3 +693,91 @@ footer .btn {
 .delete-dialog-text {
     color: var(--color-delete-dialog-text);
 }
+
+/* ── Landmark button ── */
+
+.btn--landmark {
+    background: #8b5cf6;
+    color: white;
+}
+
+.btn--landmark:hover {
+    background: #7c3aed;
+}
+
+.btn--landmark:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* ── Landmark picker modal ── */
+
+.landmark-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+}
+
+.landmark-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    min-height: 64px;
+    padding: 0.5rem;
+    border: 2px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-secondary-bg);
+    color: var(--color-secondary-text);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+.landmark-btn:hover {
+    background: var(--color-secondary-hover);
+}
+
+.landmark-btn:focus-visible {
+    outline: 3px solid var(--color-focus-ring);
+    outline-offset: 2px;
+}
+
+.landmark-btn__icon {
+    font-size: 1.5rem;
+}
+
+.landmark-custom {
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+}
+
+.landmark-custom .modal-input {
+    flex: 1;
+    font-size: 1rem;
+    min-height: 48px;
+}
+
+.landmark-custom .btn {
+    min-height: 48px;
+    min-width: 48px;
+}
+
+/* ── Suspended badge (blue variant of stationary badge) ── */
+
+.stationary-badge--suspended {
+    background: var(--color-status-requesting-bg);
+    color: var(--color-status-requesting-text);
+}
+
+/* ── Landmark count on route cards ── */
+
+.route-card__landmarks {
+    font-size: 0.875rem;
+    color: #8b5cf6;
+    font-weight: 600;
+}

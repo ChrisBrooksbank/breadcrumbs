@@ -1,5 +1,6 @@
 import type { Breadcrumb } from '@/types';
 import { haversineMeters, bearingDegrees } from '@/geo';
+import { createMotionDetector } from '@/motion';
 
 const DEFAULT_DISTANCE_METERS = 10;
 const TURN_DISTANCE_METERS = 5;
@@ -56,6 +57,10 @@ export function adaptiveThreshold(bearingHistory: number[]): number {
 export type BreadcrumbCallback = (breadcrumb: Breadcrumb) => void;
 export type ErrorCallback = (error: GeolocationPositionError) => void;
 
+export interface GeolocationServiceOptions {
+    disableMotionSuspension?: boolean;
+}
+
 export interface GeolocationService {
     start(onBreadcrumb: BreadcrumbCallback, onError?: ErrorCallback): void;
     stop(): void;
@@ -63,6 +68,10 @@ export interface GeolocationService {
     readonly movementBearing: number | null;
     /** True when in low-power stationary mode (no movement >5m for 30s). */
     readonly isStationary: boolean;
+    /** True when GPS is fully suspended due to prolonged motionlessness. */
+    readonly isSuspended: boolean;
+    /** Called when suspension state changes. */
+    onSuspendedChange: ((suspended: boolean) => void) | null;
 }
 
 interface TimestampedFix {
@@ -70,7 +79,7 @@ interface TimestampedFix {
     timestamp: number;
 }
 
-export function createGeolocationService(): GeolocationService {
+export function createGeolocationService(options?: GeolocationServiceOptions): GeolocationService {
     let watchId: number | null = null;
     let lastBreadcrumb: Breadcrumb | null = null;
 
@@ -85,6 +94,14 @@ export function createGeolocationService(): GeolocationService {
     const recentFixes: TimestampedFix[] = [];
     let stationaryPoint: Breadcrumb | null = null;
     let currentlyStationary = false;
+
+    // Motion-aware GPS suspension
+    const motionEnabled = !options?.disableMotionSuspension;
+    const motion = motionEnabled ? createMotionDetector() : null;
+    let suspended = false;
+    let onSuspendedChange: ((suspended: boolean) => void) | null = null;
+    let savedOnBreadcrumb: BreadcrumbCallback | null = null;
+    let savedOnError: ErrorCallback | undefined;
 
     function startWatcher(
         onBreadcrumb: BreadcrumbCallback,
@@ -132,6 +149,11 @@ export function createGeolocationService(): GeolocationService {
                             // Movement detected — exit stationary mode and restart in high-accuracy mode
                             currentlyStationary = false;
                             stationaryPoint = null;
+                            if (motion) motion.stop();
+                            if (suspended) {
+                                suspended = false;
+                                onSuspendedChange?.(false);
+                            }
                             if (watchId !== null) {
                                 navigator.geolocation.clearWatch(watchId);
                                 watchId = null;
@@ -153,6 +175,7 @@ export function createGeolocationService(): GeolocationService {
                         if (allClose) {
                             currentlyStationary = true;
                             stationaryPoint = rawFix;
+                            if (motion) motion.start();
                             // Restart watcher in low-power mode
                             if (watchId !== null) {
                                 navigator.geolocation.clearWatch(watchId);
@@ -196,14 +219,48 @@ export function createGeolocationService(): GeolocationService {
 
     function start(onBreadcrumb: BreadcrumbCallback, onError?: ErrorCallback): void {
         if (watchId !== null) return;
+        savedOnBreadcrumb = onBreadcrumb;
+        savedOnError = onError;
+
+        if (motion) {
+            motion.onMotionlessChange = (motionless: boolean) => {
+                if (motionless && currentlyStationary && !suspended) {
+                    // Fully suspend GPS
+                    if (watchId !== null) {
+                        navigator.geolocation.clearWatch(watchId);
+                        watchId = null;
+                    }
+                    suspended = true;
+                    onSuspendedChange?.(true);
+                } else if (!motionless && suspended) {
+                    // Resume GPS immediately
+                    suspended = false;
+                    currentlyStationary = false;
+                    stationaryPoint = null;
+                    motion.stop();
+                    onSuspendedChange?.(false);
+                    if (savedOnBreadcrumb) {
+                        startWatcher(savedOnBreadcrumb, savedOnError, {
+                            enableHighAccuracy: true,
+                        });
+                    }
+                }
+            };
+        }
+
         startWatcher(onBreadcrumb, onError, { enableHighAccuracy: true });
     }
 
     function stop(): void {
+        if (motion) {
+            motion.stop();
+            motion.onMotionlessChange = null;
+        }
         if (watchId !== null) {
             navigator.geolocation.clearWatch(watchId);
             watchId = null;
         }
+        suspended = false;
     }
 
     return {
@@ -214,6 +271,15 @@ export function createGeolocationService(): GeolocationService {
         },
         get isStationary() {
             return currentlyStationary;
+        },
+        get isSuspended() {
+            return suspended;
+        },
+        get onSuspendedChange() {
+            return onSuspendedChange;
+        },
+        set onSuspendedChange(cb: ((suspended: boolean) => void) | null) {
+            onSuspendedChange = cb;
         },
     };
 }

@@ -789,6 +789,111 @@ describe('createTrailRenderer – off-route dot color', () => {
     });
 });
 
+describe('createTrailRenderer – landmark markers', () => {
+    function makeFullCtxMock() {
+        return {
+            save: vi.fn(),
+            restore: vi.fn(),
+            rotate: vi.fn(),
+            translate: vi.fn(),
+            scale: vi.fn(),
+            clearRect: vi.fn(),
+            beginPath: vi.fn(),
+            moveTo: vi.fn(),
+            lineTo: vi.fn(),
+            bezierCurveTo: vi.fn(),
+            arc: vi.fn(),
+            stroke: vi.fn(),
+            fill: vi.fn(),
+            closePath: vi.fn(),
+            fillText: vi.fn(),
+            strokeStyle: '',
+            fillStyle: '',
+            lineWidth: 1,
+            lineCap: '',
+            lineJoin: '',
+            font: '',
+            textAlign: '',
+        } as unknown as CanvasRenderingContext2D;
+    }
+
+    it('draws diamond markers for breadcrumbs with labels', async () => {
+        const { createTrailRenderer } = await import('@/trail-renderer');
+        const canvas = document.createElement('canvas');
+        Object.defineProperty(canvas, 'clientWidth', { get: () => 400 });
+        Object.defineProperty(canvas, 'clientHeight', { get: () => 300 });
+        const ctx = makeFullCtxMock();
+        vi.spyOn(canvas, 'getContext').mockReturnValue(ctx);
+
+        const renderer = createTrailRenderer({ canvas });
+        const trail = [
+            makeBreadcrumb(51.5, -0.1),
+            { ...makeBreadcrumb(51.501, -0.1), label: 'Gate' },
+            makeBreadcrumb(51.502, -0.1),
+        ];
+
+        renderer.render({ trail, currentIndex: 0, currentPosition: null });
+
+        // closePath is called for diamond shapes — should be called for labeled breadcrumbs
+        expect((ctx.closePath as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+        // fillText should be called with the label
+        expect((ctx.fillText as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+        const textCalls = (ctx.fillText as ReturnType<typeof vi.fn>).mock.calls;
+        expect(textCalls.some((c: string[]) => c[0] === 'Gate')).toBe(true);
+    });
+
+    it('does not draw diamonds when no breadcrumbs have labels', async () => {
+        const { createTrailRenderer } = await import('@/trail-renderer');
+        const canvas = document.createElement('canvas');
+        Object.defineProperty(canvas, 'clientWidth', { get: () => 400 });
+        Object.defineProperty(canvas, 'clientHeight', { get: () => 300 });
+        const ctx = makeFullCtxMock();
+        vi.spyOn(canvas, 'getContext').mockReturnValue(ctx);
+
+        const renderer = createTrailRenderer({ canvas });
+        const trail = [
+            makeBreadcrumb(51.5, -0.1),
+            makeBreadcrumb(51.501, -0.1),
+            makeBreadcrumb(51.502, -0.1),
+        ];
+
+        renderer.render({ trail, currentIndex: 0, currentPosition: null });
+
+        expect((ctx.closePath as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+        expect((ctx.fillText as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    });
+
+    it('uses purple color for landmark markers', async () => {
+        const { createTrailRenderer } = await import('@/trail-renderer');
+        const canvas = document.createElement('canvas');
+        Object.defineProperty(canvas, 'clientWidth', { get: () => 400 });
+        Object.defineProperty(canvas, 'clientHeight', { get: () => 300 });
+
+        const fillStyles: string[] = [];
+        const ctx = makeFullCtxMock();
+        let _fillStyle = '';
+        Object.defineProperty(ctx, 'fillStyle', {
+            get: () => _fillStyle,
+            set: (v: string) => {
+                _fillStyle = v;
+                fillStyles.push(v);
+            },
+            configurable: true,
+        });
+        vi.spyOn(canvas, 'getContext').mockReturnValue(ctx);
+
+        const renderer = createTrailRenderer({ canvas });
+        const trail = [
+            { ...makeBreadcrumb(51.5, -0.1), label: 'Bench' },
+            makeBreadcrumb(51.501, -0.1),
+        ];
+
+        renderer.render({ trail, currentIndex: 0, currentPosition: null });
+
+        expect(fillStyles).toContain('#8b5cf6');
+    });
+});
+
 describe('createTrailRenderer – devicePixelRatio and RAF throttling', () => {
     function makeFullCtxMock() {
         return {

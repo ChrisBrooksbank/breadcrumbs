@@ -4,6 +4,7 @@ const WALKED_COLOR = '#9ca3af'; // grey
 const REMAINING_COLOR = '#3b82f6'; // blue
 const POSITION_DOT_COLOR = '#1d4ed8'; // dark blue (on-route)
 const POSITION_DOT_OFF_ROUTE_COLOR = '#dc2626'; // red (off-route)
+const LANDMARK_COLOR = '#8b5cf6'; // purple
 const TRAIL_LINE_WIDTH = 3;
 const METERS_PER_DEGREE_LAT = 111_319.5;
 const CATMULL_ROM_TENSION = 0.5;
@@ -356,6 +357,30 @@ export function createTrailRenderer({ canvas }: TrailRendererOptions): TrailRend
             ctx.strokeStyle = '#ffffff';
             ctx.lineWidth = 2;
             ctx.stroke();
+        }
+
+        // --- Draw landmark markers (purple diamonds with labels) ---
+        for (let i = 0; i < trail.length; i++) {
+            if (!trail[i].label) continue;
+            const lp = toCanvas(projected[i]);
+            const size = 7;
+            ctx.beginPath();
+            ctx.moveTo(lp.x, lp.y - size);
+            ctx.lineTo(lp.x + size, lp.y);
+            ctx.lineTo(lp.x, lp.y + size);
+            ctx.lineTo(lp.x - size, lp.y);
+            ctx.closePath();
+            ctx.fillStyle = LANDMARK_COLOR;
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw label text above the diamond
+            ctx.font = '11px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = LANDMARK_COLOR;
+            ctx.fillText(trail[i].label!, lp.x, lp.y - size - 4);
         }
 
         // Restore canvas transform (undo heading-up rotation)

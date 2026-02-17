@@ -7,6 +7,7 @@ import {
     saveRoute,
     listRoutes,
     deleteRoute,
+    updateLastBreadcrumb,
 } from '@/storage';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
@@ -127,5 +128,43 @@ describe('storage - saved routes', () => {
         const routes = await listRoutes();
         expect(routes).toHaveLength(1);
         expect(routes[0].name).toBe('Updated Walk');
+    });
+});
+
+describe('storage - updateLastBreadcrumb', () => {
+    it('returns null when no session exists', async () => {
+        const result = await updateLastBreadcrumb(b => ({ ...b, label: 'Gate' }));
+        expect(result).toBeNull();
+    });
+
+    it('returns null when session has no breadcrumbs', async () => {
+        // clearSession already runs in beforeEach, so no session exists
+        const result = await updateLastBreadcrumb(b => ({ ...b, label: 'Gate' }));
+        expect(result).toBeNull();
+    });
+
+    it('updates the last breadcrumb with a label', async () => {
+        await appendBreadcrumb(crumb1);
+        await appendBreadcrumb(crumb2);
+
+        const result = await updateLastBreadcrumb(b => ({ ...b, label: 'Bench' }));
+        expect(result).not.toBeNull();
+        expect(result!.label).toBe('Bench');
+        expect(result!.lat).toBe(crumb2.lat);
+
+        const session = await getSession();
+        expect(session!.breadcrumbs[1].label).toBe('Bench');
+        // First breadcrumb should be unchanged
+        expect(session!.breadcrumbs[0].label).toBeUndefined();
+    });
+
+    it('updates the only breadcrumb when session has one', async () => {
+        await appendBreadcrumb(crumb1);
+
+        const result = await updateLastBreadcrumb(b => ({ ...b, label: 'Steps' }));
+        expect(result!.label).toBe('Steps');
+
+        const session = await getSession();
+        expect(session!.breadcrumbs[0].label).toBe('Steps');
     });
 });

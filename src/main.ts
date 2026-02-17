@@ -9,6 +9,7 @@ import {
     listRoutes,
     deleteRoute,
     clearSession,
+    updateLastBreadcrumb,
 } from '@/storage';
 import { haversineMeters, bearingDegrees } from '@/geo';
 import { createNavigationService, createCompassService } from '@/navigation';
@@ -23,6 +24,7 @@ import {
     FONT_SIZES,
 } from '@/settings';
 import type { ThemeMode } from '@/settings';
+import { LANDMARK_PRESETS } from '@/landmarks';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
 function renderA11yControls(): string {
@@ -141,6 +143,14 @@ export function mountAppShell(root: HTMLElement): void {
                     Save this route
                 </button>
                 <button
+                    class="btn btn--landmark"
+                    id="btn-mark-landmark"
+                    aria-label="Mark this spot as a landmark"
+                    disabled
+                >
+                    Mark landmark
+                </button>
+                <button
                     class="btn btn--secondary"
                     id="btn-view-routes"
                     aria-label="View saved routes"
@@ -202,10 +212,21 @@ function updateStats(root: HTMLElement, elapsedSeconds: number, totalMeters: num
     }
 }
 
-export function updateStationaryBadge(root: HTMLElement, isStationary: boolean): void {
+export function updateStationaryBadge(
+    root: HTMLElement,
+    isStationary: boolean,
+    isSuspended = false
+): void {
     const badge = root.querySelector<HTMLElement>('#stationary-badge');
     if (badge) {
-        badge.hidden = !isStationary;
+        badge.hidden = !isStationary && !isSuspended;
+        if (isSuspended) {
+            badge.textContent = 'Paused \u2014 saving battery';
+            badge.classList.add('stationary-badge--suspended');
+        } else {
+            badge.textContent = 'Stationary';
+            badge.classList.remove('stationary-badge--suspended');
+        }
     }
 }
 
@@ -244,8 +265,10 @@ function setStatusError(root: HTMLElement, message: string): void {
 function enableActionButtons(root: HTMLElement): void {
     const takeBack = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
     const saveRoute = root.querySelector<HTMLButtonElement>('#btn-save-route');
+    const markLandmark = root.querySelector<HTMLButtonElement>('#btn-mark-landmark');
     if (takeBack) takeBack.disabled = false;
     if (saveRoute) saveRoute.disabled = false;
+    if (markLandmark) markLandmark.disabled = false;
 }
 
 export function mountNavigationView(root: HTMLElement): void {
@@ -477,7 +500,7 @@ export function switchToNavigationView(
         }
     };
 
-    const navGps = createGeolocationService();
+    const navGps = createGeolocationService({ disableMotionSuspension: true });
 
     const loadBreadcrumbs: Promise<Breadcrumb[]> = breadcrumbsOverride
         ? Promise.resolve(breadcrumbsOverride)
@@ -519,6 +542,10 @@ export function switchToNavigationView(
 
             compass.start();
 
+            // Landmark announcement state
+            let landmarkAnnouncedFar = false;
+            let landmarkAnnouncedNear = false;
+
             nav.onOffRouteChange = (offRoute: boolean) => {
                 if (offRoute) {
                     feedback.playOffRouteFeedback();
@@ -547,6 +574,20 @@ export function switchToNavigationView(
                         updateNavDistance(root, dist);
                         feedback.announceDistance(dist);
                         feedback.vibrateProximity(dist);
+
+                        // Landmark announcements
+                        if (target.label) {
+                            if (!landmarkAnnouncedFar && dist <= 40) {
+                                landmarkAnnouncedFar = true;
+                                feedback.announce(
+                                    `${target.label} ahead in ${Math.round(dist)} metres`
+                                );
+                            }
+                            if (!landmarkAnnouncedNear && dist <= 15) {
+                                landmarkAnnouncedNear = true;
+                                feedback.announce(`Approaching ${target.label}`);
+                            }
+                        }
                     }
 
                     const prevTarget = nav.targetBreadcrumb;
@@ -555,6 +596,8 @@ export function switchToNavigationView(
                         feedback.playConfirmationBeep();
                         feedback.resetDistanceAnnouncements();
                         offCourseDetector.reset();
+                        landmarkAnnouncedFar = false;
+                        landmarkAnnouncedNear = false;
                         if (nav.progress.arrived) {
                             showNavArrived(root);
                             feedback.cancelPending();
@@ -619,6 +662,100 @@ let modalOpen = false;
 /** @internal Reset modal guard — exposed for tests only. */
 export function _resetModalOpen(): void {
     modalOpen = false;
+}
+
+export function openLandmarkPicker(onSelect: (label: string) => void): void {
+    if (modalOpen) return;
+    modalOpen = true;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.setAttribute('aria-labelledby', 'landmark-modal-title');
+
+    const presetButtons = LANDMARK_PRESETS.map(
+        p =>
+            `<button class="landmark-btn" data-label="${escapeHtml(p.label)}" aria-label="Mark as ${escapeHtml(p.label)}">
+                <span class="landmark-btn__icon" aria-hidden="true">${p.icon}</span>
+                <span>${escapeHtml(p.label)}</span>
+            </button>`
+    ).join('');
+
+    backdrop.innerHTML = `
+        <div class="modal">
+            <h2 id="landmark-modal-title">Mark landmark</h2>
+            <div class="landmark-grid">${presetButtons}</div>
+            <div class="landmark-custom">
+                <input
+                    class="modal-input"
+                    id="landmark-custom-input"
+                    type="text"
+                    placeholder="Custom label"
+                    aria-label="Custom landmark label"
+                    maxlength="40"
+                    autocomplete="off"
+                />
+                <button class="btn btn--primary" id="btn-landmark-custom-confirm" aria-label="Confirm custom landmark">OK</button>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn--secondary" id="btn-landmark-cancel" aria-label="Cancel marking landmark">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(backdrop);
+
+    const customInput = backdrop.querySelector<HTMLInputElement>('#landmark-custom-input');
+
+    function handleKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Escape') closeModal();
+    }
+
+    function closeModal(): void {
+        modalOpen = false;
+        document.removeEventListener('keydown', handleKeydown);
+        backdrop.remove();
+    }
+
+    function select(label: string): void {
+        closeModal();
+        onSelect(label);
+    }
+
+    document.addEventListener('keydown', handleKeydown);
+
+    // Preset buttons
+    for (const btn of backdrop.querySelectorAll<HTMLButtonElement>('.landmark-btn')) {
+        btn.addEventListener('click', () => {
+            const label = btn.dataset.label;
+            if (label) select(label);
+        });
+    }
+
+    // Custom input
+    const customConfirm = backdrop.querySelector<HTMLButtonElement>('#btn-landmark-custom-confirm');
+    if (customConfirm && customInput) {
+        customConfirm.addEventListener('click', () => {
+            const label = customInput.value.trim();
+            if (label) select(label);
+        });
+        customInput.addEventListener('keydown', (e: KeyboardEvent) => {
+            if (e.key === 'Enter') {
+                const label = customInput.value.trim();
+                if (label) select(label);
+            }
+        });
+    }
+
+    // Cancel button
+    const cancelBtn = backdrop.querySelector<HTMLButtonElement>('#btn-landmark-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+
+    // Backdrop click
+    backdrop.addEventListener('click', (e: MouseEvent) => {
+        if (e.target === backdrop) closeModal();
+    });
 }
 
 export function openSaveModal(
@@ -714,6 +851,7 @@ export function openSaveModal(
                 distance: totalMeters,
                 breadcrumbCount: breadcrumbs.length,
                 breadcrumbs,
+                landmarkCount: breadcrumbs.filter(b => b.label).length,
             };
             saveRoute(route)
                 .then(async () => {
@@ -809,6 +947,11 @@ function buildRouteCard(route: SavedRoute, root: HTMLElement, onBack: () => void
     const distanceText = formatDistance(route.distance);
     const dateText = formatRouteDate(route.date);
     const countText = `${route.breadcrumbCount} point${route.breadcrumbCount === 1 ? '' : 's'}`;
+    const landmarks = route.landmarkCount ?? route.breadcrumbs.filter(b => b.label).length;
+    const landmarkHtml =
+        landmarks > 0
+            ? `<span class="route-card__landmarks">${landmarks} landmark${landmarks === 1 ? '' : 's'}</span>`
+            : '';
 
     item.innerHTML = `
         <div class="route-card__name">${escapeHtml(route.name)}</div>
@@ -816,6 +959,7 @@ function buildRouteCard(route: SavedRoute, root: HTMLElement, onBack: () => void
             <span>${dateText}</span>
             <span>${distanceText}</span>
             <span>${countText}</span>
+            ${landmarkHtml}
         </div>
         <div class="route-card__actions">
             <button class="btn btn--primary btn--sm" data-action="follow" aria-label="Follow route ${escapeHtml(route.name)}">Follow</button>
@@ -986,11 +1130,28 @@ export function startRecording(root: HTMLElement): void {
             }
             lastBreadcrumb = breadcrumb;
 
-            updateStationaryBadge(root, gps.isStationary);
+            updateStationaryBadge(root, gps.isStationary, gps.isSuspended);
 
             if (breadcrumbCount === 1) {
                 setStatusRecording(root);
                 enableActionButtons(root);
+
+                // Wire landmark button
+                const markBtn = root.querySelector<HTMLButtonElement>('#btn-mark-landmark');
+                if (markBtn) {
+                    markBtn.addEventListener('click', () => {
+                        openLandmarkPicker((label: string) => {
+                            updateLastBreadcrumb(b => ({ ...b, label })).catch(() => {
+                                // Silent fail — breadcrumb label not critical
+                            });
+                        });
+                    });
+                }
+
+                // Wire suspension badge
+                gps.onSuspendedChange = (isSuspended: boolean) => {
+                    updateStationaryBadge(root, gps.isStationary, isSuspended);
+                };
 
                 const takeBackBtn = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
                 if (takeBackBtn) {

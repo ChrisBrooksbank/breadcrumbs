@@ -644,6 +644,51 @@ describe('GeolocationService – stationary detection', () => {
     });
 });
 
+describe('GeolocationService – isSuspended and onSuspendedChange', () => {
+    let watchCallback: PositionCallback;
+
+    beforeEach(() => {
+        vi.stubGlobal('navigator', {
+            geolocation: {
+                watchPosition: vi.fn((success: PositionCallback) => {
+                    watchCallback = success;
+                    return 1;
+                }),
+                clearWatch: vi.fn(),
+            },
+        });
+        return () => {
+            vi.unstubAllGlobals();
+        };
+    });
+
+    it('isSuspended is false initially', () => {
+        const service = createGeolocationService();
+        service.start(vi.fn());
+        expect(service.isSuspended).toBe(false);
+    });
+
+    it('onSuspendedChange is null by default', () => {
+        const service = createGeolocationService();
+        expect(service.onSuspendedChange).toBeNull();
+    });
+
+    it('can set and get onSuspendedChange callback', () => {
+        const service = createGeolocationService();
+        const cb = vi.fn();
+        service.onSuspendedChange = cb;
+        expect(service.onSuspendedChange).toBe(cb);
+    });
+
+    it('disableMotionSuspension option prevents motion detector creation', () => {
+        const service = createGeolocationService({ disableMotionSuspension: true });
+        service.start(vi.fn());
+        // Should still work normally without motion
+        watchCallback(makePosition(51.5, -0.1, 5, 0));
+        expect(service.isSuspended).toBe(false);
+    });
+});
+
 describe('GeolocationService – adaptive threshold in practice', () => {
     let watchCallback: PositionCallback;
 

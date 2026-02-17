@@ -3,6 +3,7 @@ export interface Breadcrumb {
     lng: number;
     accuracy: number;
     timestamp: number;
+    label?: string;
 }
 
 export interface Session {
@@ -18,4 +19,5 @@ export interface SavedRoute {
     distance: number;
     breadcrumbCount: number;
     breadcrumbs: Breadcrumb[];
+    landmarkCount?: number;
 }
