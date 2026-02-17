@@ -11,13 +11,93 @@ import {
 import { haversineMeters, bearingDegrees } from '@/geo';
 import { createNavigationService, createCompassService } from '@/navigation';
 import { createFeedbackService, classifyDirection } from '@/feedback';
+import {
+    initSettings,
+    getFontSize,
+    increaseFontSize,
+    decreaseFontSize,
+    getThemeMode,
+    setThemeMode,
+    FONT_SIZES,
+} from '@/settings';
+import type { ThemeMode } from '@/settings';
 import type { Breadcrumb, SavedRoute } from '@/types';
+
+function renderA11yControls(): string {
+    const size = getFontSize();
+    const mode = getThemeMode();
+    const minDisabled = size === FONT_SIZES[0] ? 'disabled' : '';
+    const maxDisabled = size === FONT_SIZES[FONT_SIZES.length - 1] ? 'disabled' : '';
+
+    function pressed(m: ThemeMode): string {
+        return mode === m ? 'aria-pressed="true"' : 'aria-pressed="false"';
+    }
+
+    return `
+        <div class="a11y-controls" role="toolbar" aria-label="Accessibility controls">
+            <div class="a11y-controls__group">
+                <span class="a11y-controls__label">Text</span>
+                <button class="a11y-controls__btn" id="btn-font-down" aria-label="Decrease font size" ${minDisabled}>A-</button>
+                <button class="a11y-controls__btn" id="btn-font-up" aria-label="Increase font size" ${maxDisabled}>A+</button>
+            </div>
+            <div class="a11y-controls__group">
+                <span class="a11y-controls__label">Theme</span>
+                <button class="a11y-controls__btn" id="btn-theme-light" aria-label="Light theme" ${pressed('light')}>Day</button>
+                <button class="a11y-controls__btn" id="btn-theme-dark" aria-label="Dark theme" ${pressed('dark')}>Night</button>
+                <button class="a11y-controls__btn" id="btn-theme-system" aria-label="System theme" ${pressed('system')}>Auto</button>
+            </div>
+        </div>
+    `;
+}
+
+function wireA11yControls(root: HTMLElement): void {
+    const fontDown = root.querySelector<HTMLButtonElement>('#btn-font-down');
+    const fontUp = root.querySelector<HTMLButtonElement>('#btn-font-up');
+
+    function refreshFontButtons(): void {
+        const size = getFontSize();
+        if (fontDown) fontDown.disabled = size === FONT_SIZES[0];
+        if (fontUp) fontUp.disabled = size === FONT_SIZES[FONT_SIZES.length - 1];
+    }
+
+    fontDown?.addEventListener('click', () => {
+        decreaseFontSize();
+        refreshFontButtons();
+    });
+    fontUp?.addEventListener('click', () => {
+        increaseFontSize();
+        refreshFontButtons();
+    });
+
+    const themeButtons: { id: string; mode: ThemeMode }[] = [
+        { id: '#btn-theme-light', mode: 'light' },
+        { id: '#btn-theme-dark', mode: 'dark' },
+        { id: '#btn-theme-system', mode: 'system' },
+    ];
+
+    function refreshThemeButtons(): void {
+        const current = getThemeMode();
+        for (const { id, mode } of themeButtons) {
+            const btn = root.querySelector<HTMLButtonElement>(id);
+            btn?.setAttribute('aria-pressed', String(current === mode));
+        }
+    }
+
+    for (const { id, mode } of themeButtons) {
+        const btn = root.querySelector<HTMLButtonElement>(id);
+        btn?.addEventListener('click', () => {
+            setThemeMode(mode);
+            refreshThemeButtons();
+        });
+    }
+}
 
 export function mountAppShell(root: HTMLElement): void {
     root.innerHTML = `
         <header>
             <h1>Breadcrumbs</h1>
         </header>
+        ${renderA11yControls()}
         <main>
             <div class="card" id="recording-status-card">
                 <h2>Recording Status</h2>
@@ -66,6 +146,7 @@ export function mountAppShell(root: HTMLElement): void {
         </main>
         <footer>Breadcrumbs &mdash; map-free navigation</footer>
     `;
+    wireA11yControls(root);
 }
 
 function setStatusRecording(root: HTMLElement): void {
@@ -160,14 +241,15 @@ export function mountNavigationView(root: HTMLElement): void {
         <header>
             <h1>Breadcrumbs</h1>
         </header>
+        ${renderA11yControls()}
         <main>
             <div class="nav-view">
                 <div class="nav-compass-container" aria-label="Compass direction indicator">
                     <svg class="nav-compass-arrow" id="nav-compass-arrow"
                         viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"
                         aria-hidden="true">
-                        <polygon points="50,5 62,70 50,60 38,70" fill="#1d4ed8"/>
-                        <polygon points="50,95 62,30 50,40 38,30" fill="#9ca3af"/>
+                        <polygon points="50,5 62,70 50,60 38,70" class="compass-north"/>
+                        <polygon points="50,95 62,30 50,40 38,30" class="compass-south"/>
                     </svg>
                     <p class="nav-calibration-hint" id="nav-calibration-hint" hidden>
                         Move your phone in a figure-8 to calibrate compass
@@ -191,6 +273,7 @@ export function mountNavigationView(root: HTMLElement): void {
             </button>
         </footer>
     `;
+    wireA11yControls(root);
 }
 
 function updateNavArrow(root: HTMLElement, arrowDeg: number): void {
@@ -481,7 +564,6 @@ export function openSaveModal(
                     if (modal) {
                         const errorMsg = document.createElement('p');
                         errorMsg.className = 'modal-error';
-                        errorMsg.style.color = '#dc2626';
                         errorMsg.textContent = 'Could not save route. Please try again.';
                         modal.appendChild(errorMsg);
                     }
@@ -503,6 +585,7 @@ export function mountSavedRoutesView(root: HTMLElement, onBack: () => void): voi
         <header>
             <h1>Breadcrumbs</h1>
         </header>
+        ${renderA11yControls()}
         <main>
             <div class="routes-screen">
                 <button class="btn btn--secondary" id="btn-routes-back" aria-label="Back to recording screen">
@@ -515,6 +598,8 @@ export function mountSavedRoutesView(root: HTMLElement, onBack: () => void): voi
         </main>
         <footer>Breadcrumbs &mdash; map-free navigation</footer>
     `;
+
+    wireA11yControls(root);
 
     const backBtn = root.querySelector<HTMLButtonElement>('#btn-routes-back');
     if (backBtn) {
@@ -614,7 +699,7 @@ function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: (
     backdrop.innerHTML = `
         <div class="modal">
             <h2 id="delete-modal-title">Delete route?</h2>
-            <p style="color:#374151;">"${escapeHtml(route.name)}" will be permanently deleted.</p>
+            <p class="delete-dialog-text">"${escapeHtml(route.name)}" will be permanently deleted.</p>
             <div class="modal-actions">
                 <button class="btn btn--danger" id="btn-delete-confirm" aria-label="Confirm delete route">Delete</button>
                 <button class="btn btn--secondary" id="btn-delete-cancel" aria-label="Cancel delete">Cancel</button>
@@ -662,7 +747,6 @@ function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: (
                     if (modal && !modal.querySelector('.modal-error')) {
                         const errorMsg = document.createElement('p');
                         errorMsg.className = 'modal-error';
-                        errorMsg.style.color = '#dc2626';
                         errorMsg.textContent = 'Could not delete route. Please try again.';
                         modal.appendChild(errorMsg);
                     }
@@ -812,6 +896,7 @@ export function startRecording(root: HTMLElement): void {
 
 const appRoot = document.getElementById('app');
 if (appRoot) {
+    initSettings();
     mountAppShell(appRoot);
     clearSession().then(() => startRecording(appRoot));
 }

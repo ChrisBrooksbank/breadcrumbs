@@ -13,6 +13,7 @@ import {
     _resetModalOpen,
 } from './main';
 import { clearSession, appendBreadcrumb, listRoutes, saveRoute, deleteRoute } from './storage';
+import { setFontSize, FONT_SIZES } from './settings';
 
 describe('App Shell', () => {
     let root: HTMLElement;
@@ -1157,5 +1158,71 @@ describe('App Shell has Saved routes button', () => {
     it('"Saved routes" button has aria-label', () => {
         const btn = root.querySelector('#btn-view-routes');
         expect(btn?.getAttribute('aria-label')).toBeTruthy();
+    });
+});
+
+describe('Accessibility controls bar', () => {
+    let root: HTMLElement;
+    const onBack = vi.fn();
+
+    beforeEach(() => {
+        localStorage.clear();
+        document.documentElement.style.fontSize = '';
+        document.documentElement.removeAttribute('data-theme');
+        root = document.createElement('div');
+        root.id = 'app';
+        document.body.appendChild(root);
+        return () => {
+            document.body.removeChild(root);
+        };
+    });
+
+    it('renders controls bar in mountAppShell', () => {
+        mountAppShell(root);
+        expect(root.querySelector('.a11y-controls')).not.toBeNull();
+    });
+
+    it('renders controls bar in mountNavigationView', () => {
+        mountNavigationView(root);
+        expect(root.querySelector('.a11y-controls')).not.toBeNull();
+    });
+
+    it('renders controls bar in mountSavedRoutesView', () => {
+        mountSavedRoutesView(root, onBack);
+        expect(root.querySelector('.a11y-controls')).not.toBeNull();
+    });
+
+    it('renders font size buttons', () => {
+        mountAppShell(root);
+        expect(root.querySelector('#btn-font-down')).not.toBeNull();
+        expect(root.querySelector('#btn-font-up')).not.toBeNull();
+    });
+
+    it('renders theme toggle buttons', () => {
+        mountAppShell(root);
+        expect(root.querySelector('#btn-theme-light')).not.toBeNull();
+        expect(root.querySelector('#btn-theme-dark')).not.toBeNull();
+        expect(root.querySelector('#btn-theme-system')).not.toBeNull();
+    });
+
+    it('controls bar has toolbar role and aria-label', () => {
+        mountAppShell(root);
+        const bar = root.querySelector('.a11y-controls');
+        expect(bar?.getAttribute('role')).toBe('toolbar');
+        expect(bar?.getAttribute('aria-label')).toBeTruthy();
+    });
+
+    it('font down is disabled at minimum size', () => {
+        setFontSize(FONT_SIZES[0]);
+        mountAppShell(root);
+        const btn = root.querySelector<HTMLButtonElement>('#btn-font-down');
+        expect(btn?.disabled).toBe(true);
+    });
+
+    it('font up is disabled at maximum size', () => {
+        setFontSize(FONT_SIZES[FONT_SIZES.length - 1]);
+        mountAppShell(root);
+        const btn = root.querySelector<HTMLButtonElement>('#btn-font-up');
+        expect(btn?.disabled).toBe(true);
     });
 });
