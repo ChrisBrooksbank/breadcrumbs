@@ -139,6 +139,15 @@ main {
     opacity: 0.9;
 }
 
+.btn:focus-visible {
+    outline: 3px solid #1d4ed8;
+    outline-offset: 2px;
+}
+
+.btn--danger:focus-visible {
+    outline-color: #dc2626;
+}
+
 .btn--primary {
     background: #1d4ed8;
     color: white;

@@ -91,6 +91,11 @@ export interface FeedbackService {
     /** Whether the Vibration API is available in this environment. */
     readonly vibrationAvailable: boolean;
     /**
+     * Cancel any pending debounced direction announcement.
+     * Call when stopping navigation to prevent stale speech firing.
+     */
+    cancelPending(): void;
+    /**
      * Silent mode: when true, speech is suppressed (tones + vibration only).
      * Persisted in localStorage. Can be toggled live during navigation.
      */
@@ -145,25 +150,29 @@ export function createFeedbackService(): FeedbackService {
      * @param gainValue  Peak gain (0–1)
      */
     function playTone(frequency: number, duration: number, gainValue: number): void {
-        const ctx = getAudioContext();
-        if (!ctx) return;
+        try {
+            const ctx = getAudioContext();
+            if (!ctx) return;
 
-        const oscillator = ctx.createOscillator();
-        const gainNode = ctx.createGain();
+            const oscillator = ctx.createOscillator();
+            const gainNode = ctx.createGain();
 
-        oscillator.connect(gainNode);
-        gainNode.connect(ctx.destination);
+            oscillator.connect(gainNode);
+            gainNode.connect(ctx.destination);
 
-        oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(frequency, ctx.currentTime);
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(frequency, ctx.currentTime);
 
-        // Simple envelope: ramp up then down to avoid clicks
-        gainNode.gain.setValueAtTime(0, ctx.currentTime);
-        gainNode.gain.linearRampToValueAtTime(gainValue, ctx.currentTime + 0.01);
-        gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
+            // Simple envelope: ramp up then down to avoid clicks
+            gainNode.gain.setValueAtTime(0, ctx.currentTime);
+            gainNode.gain.linearRampToValueAtTime(gainValue, ctx.currentTime + 0.01);
+            gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
 
-        oscillator.start(ctx.currentTime);
-        oscillator.stop(ctx.currentTime + duration);
+            oscillator.start(ctx.currentTime);
+            oscillator.stop(ctx.currentTime + duration);
+        } catch {
+            // AudioContext may throw on restricted/suspended contexts — silent fallback
+        }
     }
 
     function playConfirmationBeep(): void {
@@ -234,6 +243,13 @@ export function createFeedbackService(): FeedbackService {
         announced.clear();
     }
 
+    function cancelPending(): void {
+        if (directionDebounceTimer !== null) {
+            clearTimeout(directionDebounceTimer);
+            directionDebounceTimer = null;
+        }
+    }
+
     /**
      * Vibrate a pattern using the Vibration API.
      * No-ops silently when the API is unavailable.
@@ -283,6 +299,7 @@ export function createFeedbackService(): FeedbackService {
         announce,
         announceDistance,
         resetDistanceAnnouncements,
+        cancelPending,
         playConfirmationBeep,
         playProximityAlert,
         vibrateAlignment,

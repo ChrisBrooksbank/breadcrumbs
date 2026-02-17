@@ -10,6 +10,7 @@ import {
     switchToNavigationView,
     openSaveModal,
     mountSavedRoutesView,
+    _resetModalOpen,
 } from './main';
 import { clearSession, appendBreadcrumb, listRoutes, saveRoute, deleteRoute } from './storage';
 
@@ -678,6 +679,7 @@ describe('openSaveModal', () => {
     afterEach(() => {
         // Clean up any lingering modals
         document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+        _resetModalOpen();
     });
 
     it('renders a modal dialog with a route name input', () => {
@@ -766,6 +768,74 @@ describe('openSaveModal', () => {
     });
 });
 
+describe('openSaveModal – keyboard and guard behaviour', () => {
+    afterEach(() => {
+        document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+        _resetModalOpen();
+    });
+
+    it('disables confirm button during save', async () => {
+        openSaveModal([{ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 }], 50);
+
+        const input = document.querySelector<HTMLInputElement>('#save-route-name');
+        if (input) input.value = 'Disable test';
+
+        const confirmBtn = document.querySelector<HTMLButtonElement>('#btn-save-confirm');
+        confirmBtn?.click();
+
+        // Button should be disabled immediately after click
+        expect(confirmBtn?.disabled).toBe(true);
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+    });
+
+    it('blocks second openSaveModal call while one is open', () => {
+        openSaveModal([], 0);
+        openSaveModal([], 0);
+
+        const backdrops = document.querySelectorAll('.modal-backdrop');
+        expect(backdrops.length).toBe(1);
+    });
+
+    it('closes modal when Escape key is pressed', () => {
+        openSaveModal([], 0);
+
+        const event = new KeyboardEvent('keydown', { key: 'Escape' });
+        document.dispatchEvent(event);
+
+        expect(document.querySelector('.modal-backdrop')).toBeNull();
+    });
+
+    it('submits save modal when Enter is pressed with valid name', async () => {
+        openSaveModal([{ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 }], 50);
+
+        const input = document.querySelector<HTMLInputElement>('#save-route-name');
+        if (input) input.value = 'Enter key test';
+
+        const enterEvent = new KeyboardEvent('keydown', { key: 'Enter' });
+        input?.dispatchEvent(enterEvent);
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // Modal should close after successful save
+        expect(document.querySelector('.modal-backdrop')).toBeNull();
+
+        const routes = await listRoutes();
+        expect(routes.some(r => r.name === 'Enter key test')).toBe(true);
+    });
+
+    it('does not submit save modal when Enter is pressed with empty name', () => {
+        openSaveModal([], 0);
+
+        const input = document.querySelector<HTMLInputElement>('#save-route-name');
+        const enterEvent = new KeyboardEvent('keydown', { key: 'Enter' });
+        input?.dispatchEvent(enterEvent);
+
+        // Modal should still be open
+        expect(document.querySelector('.modal-backdrop')).not.toBeNull();
+    });
+});
+
 describe('"Save this route" button opens modal after first breadcrumb', () => {
     let root: HTMLElement;
     let watchPositionCallback: PositionCallback;
@@ -790,6 +860,7 @@ describe('"Save this route" button opens modal after first breadcrumb', () => {
         return () => {
             document.body.removeChild(root);
             document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+            _resetModalOpen();
             vi.unstubAllGlobals();
         };
     });
@@ -849,6 +920,7 @@ describe('mountSavedRoutesView', () => {
         return () => {
             document.body.removeChild(root);
             document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+            _resetModalOpen();
         };
     });
 

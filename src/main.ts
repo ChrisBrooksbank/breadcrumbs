@@ -311,6 +311,7 @@ export function switchToNavigationView(
 
                     if (nav.progress.arrived) {
                         showNavArrived(root);
+                        feedback.cancelPending();
                         navGps.stop();
                         compass.stop();
                         return;
@@ -330,6 +331,7 @@ export function switchToNavigationView(
                         feedback.resetDistanceAnnouncements();
                         if (nav.progress.arrived) {
                             showNavArrived(root);
+                            feedback.cancelPending();
                             navGps.stop();
                             compass.stop();
                         } else {
@@ -357,6 +359,7 @@ export function switchToNavigationView(
     const stopBtn = root.querySelector<HTMLButtonElement>('#btn-stop-navigation');
     if (stopBtn) {
         stopBtn.addEventListener('click', () => {
+            feedback.cancelPending();
             compass.stop();
             navGps.stop();
             mountAppShell(root);
@@ -365,11 +368,20 @@ export function switchToNavigationView(
     }
 }
 
+let modalOpen = false;
+
+/** @internal Reset modal guard — exposed for tests only. */
+export function _resetModalOpen(): void {
+    modalOpen = false;
+}
+
 export function openSaveModal(
     breadcrumbs: Breadcrumb[],
     totalMeters: number,
     onSaved?: () => void
 ): void {
+    if (modalOpen) return;
+    modalOpen = true;
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
     backdrop.setAttribute('role', 'dialog');
@@ -404,9 +416,19 @@ export function openSaveModal(
     // Focus input on open
     setTimeout(() => input?.focus(), 0);
 
+    function handleKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Escape') {
+            closeModal();
+        }
+    }
+
     function closeModal(): void {
+        modalOpen = false;
+        document.removeEventListener('keydown', handleKeydown);
         backdrop.remove();
     }
+
+    document.addEventListener('keydown', handleKeydown);
 
     if (cancelBtn) {
         cancelBtn.addEventListener('click', closeModal);
@@ -416,6 +438,15 @@ export function openSaveModal(
     backdrop.addEventListener('click', (e: MouseEvent) => {
         if (e.target === backdrop) closeModal();
     });
+
+    // Bug 5: Enter key submits the save modal
+    if (input) {
+        input.addEventListener('keydown', (e: KeyboardEvent) => {
+            if (e.key === 'Enter') {
+                confirmBtn?.click();
+            }
+        });
+    }
 
     if (confirmBtn && input) {
         confirmBtn.addEventListener('click', () => {
@@ -427,6 +458,8 @@ export function openSaveModal(
             // Clear any stale error message from a previous attempt
             const existingError = backdrop.querySelector('.modal-error');
             if (existingError) existingError.remove();
+
+            confirmBtn.disabled = true;
 
             const route = {
                 id: `route-${Date.now()}`,
@@ -443,6 +476,7 @@ export function openSaveModal(
                     onSaved?.();
                 })
                 .catch(() => {
+                    confirmBtn.disabled = false;
                     const modal = backdrop.querySelector('.modal');
                     if (modal) {
                         const errorMsg = document.createElement('p');
@@ -568,6 +602,9 @@ function escapeHtml(text: string): string {
 }
 
 function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: () => void): void {
+    if (modalOpen) return;
+    modalOpen = true;
+
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
     backdrop.setAttribute('role', 'dialog');
@@ -587,9 +624,19 @@ function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: (
 
     document.body.appendChild(backdrop);
 
+    function handleKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Escape') {
+            closeDialog();
+        }
+    }
+
     function closeDialog(): void {
+        modalOpen = false;
+        document.removeEventListener('keydown', handleKeydown);
         backdrop.remove();
     }
+
+    document.addEventListener('keydown', handleKeydown);
 
     const cancelBtn = backdrop.querySelector<HTMLButtonElement>('#btn-delete-cancel');
     if (cancelBtn) {
@@ -603,12 +650,14 @@ function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: (
     const confirmBtn = backdrop.querySelector<HTMLButtonElement>('#btn-delete-confirm');
     if (confirmBtn) {
         confirmBtn.addEventListener('click', () => {
+            confirmBtn.disabled = true;
             deleteRoute(route.id)
                 .then(() => {
                     closeDialog();
                     renderRoutesList(root, onBack);
                 })
                 .catch(() => {
+                    confirmBtn.disabled = false;
                     const modal = backdrop.querySelector('.modal');
                     if (modal && !modal.querySelector('.modal-error')) {
                         const errorMsg = document.createElement('p');
@@ -709,12 +758,21 @@ export function startRecording(root: HTMLElement): void {
                 const saveBtn = root.querySelector<HTMLButtonElement>('#btn-save-route');
                 if (saveBtn) {
                     saveBtn.addEventListener('click', () => {
+                        const onSaved = () => {
+                            gps.stop();
+                            if (timerInterval !== null) {
+                                clearInterval(timerInterval);
+                                timerInterval = null;
+                            }
+                            mountAppShell(root);
+                            startRecording(root);
+                        };
                         getSession()
                             .then(session => {
-                                openSaveModal(session?.breadcrumbs ?? [], totalMeters);
+                                openSaveModal(session?.breadcrumbs ?? [], totalMeters, onSaved);
                             })
                             .catch(() => {
-                                openSaveModal([], totalMeters);
+                                openSaveModal([], totalMeters, onSaved);
                             });
                     });
                 }

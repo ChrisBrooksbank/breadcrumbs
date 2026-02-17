@@ -736,6 +736,70 @@ describe('FeedbackService – direction debounce', () => {
     });
 });
 
+describe('FeedbackService – cancelPending', () => {
+    let speakMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        speakMock = vi.fn();
+        vi.stubGlobal('speechSynthesis', { speak: speakMock });
+        vi.stubGlobal('SpeechSynthesisUtterance', function (text: string) {
+            return { text };
+        });
+    });
+
+    afterEach(() => {
+        vi.runAllTimers();
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+    });
+
+    it('prevents pending debounced direction from firing', () => {
+        const service = createFeedbackService();
+        service.speak('turn left');
+        // Cancel before debounce fires
+        service.cancelPending();
+        vi.runAllTimers();
+        expect(speakMock).not.toHaveBeenCalled();
+    });
+
+    it('is safe to call with no pending timer', () => {
+        const service = createFeedbackService();
+        expect(() => service.cancelPending()).not.toThrow();
+    });
+});
+
+describe('FeedbackService – playTone resilience', () => {
+    beforeEach(() => {
+        // AudioContext that throws on createOscillator
+        vi.stubGlobal(
+            'AudioContext',
+            vi.fn(() => ({
+                currentTime: 0,
+                destination: {},
+                createOscillator: vi.fn(() => {
+                    throw new Error('AudioContext restricted');
+                }),
+                createGain: vi.fn(),
+            }))
+        );
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('playConfirmationBeep() does not throw when AudioContext operations fail', () => {
+        const service = createFeedbackService();
+        expect(() => service.playConfirmationBeep()).not.toThrow();
+    });
+
+    it('playProximityAlert() does not throw when AudioContext operations fail', () => {
+        const service = createFeedbackService();
+        expect(() => service.playProximityAlert()).not.toThrow();
+    });
+});
+
 describe('FeedbackService – direction throttle', () => {
     let speakMock: ReturnType<typeof vi.fn>;
 
