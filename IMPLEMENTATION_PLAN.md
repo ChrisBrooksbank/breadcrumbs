@@ -2,7 +2,7 @@
 
 ## Status
 
-- Planning iterations: 2
+- Planning iterations: 3
 - Build iterations: 0
 - Last updated: 2026-02-17
 
