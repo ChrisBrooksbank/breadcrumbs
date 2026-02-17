@@ -69,14 +69,14 @@ Most modern GPS watches have breadcrumb navigation built in.
 
 The Web Platform provides all necessary APIs:
 
-| Capability | API | Notes |
-|---|---|---|
-| GPS tracking | `navigator.geolocation.watchPosition()` | ~3m accuracy on phones with `enableHighAccuracy: true` |
-| Compass heading | `DeviceOrientationEvent` | Magnetic heading relative to north |
-| Offline support | Service Workers + Cache API | Full offline operation after first load |
-| Vibration / haptics | Vibration API | Supported on Android; **not supported on iOS Safari** |
-| Local storage | IndexedDB | Persistent route storage across sessions |
-| Install to home screen | Web App Manifest | Feels like a native app |
+| Capability             | API                                     | Notes                                                  |
+| ---------------------- | --------------------------------------- | ------------------------------------------------------ |
+| GPS tracking           | `navigator.geolocation.watchPosition()` | ~3m accuracy on phones with `enableHighAccuracy: true` |
+| Compass heading        | `DeviceOrientationEvent`                | Magnetic heading relative to north                     |
+| Offline support        | Service Workers + Cache API             | Full offline operation after first load                |
+| Vibration / haptics    | Vibration API                           | Supported on Android; **not supported on iOS Safari**  |
+| Local storage          | IndexedDB                               | Persistent route storage across sessions               |
+| Install to home screen | Web App Manifest                        | Feels like a native app                                |
 
 ### Key Limitation: iOS Haptics
 
