@@ -16,11 +16,13 @@
         "format:check": "prettier --check .",
         "typecheck": "tsc --noEmit",
         "knip": "knip",
+        "e2e": "playwright test",
         "check": "npm run typecheck && npm run lint && npm run format:check && npm run knip",
         "prepare": "husky"
     },
     "devDependencies": {
         "@eslint/js": "^9.0.0",
+        "@playwright/test": "^1.58.2",
         "@types/node": "^22.0.0",
         "@vitest/coverage-v8": "^2.0.0",
         "eslint": "^9.0.0",

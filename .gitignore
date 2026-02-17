@@ -10,3 +10,8 @@ coverage/
 
 # Local Netlify folder
 .netlify
+
+# Playwright
+e2e/screenshots/
+test-results/
+playwright-report/
