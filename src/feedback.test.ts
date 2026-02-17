@@ -728,8 +728,8 @@ describe('FeedbackService – direction debounce', () => {
         const service = createFeedbackService();
         service.speak('turn left');
         vi.runAllTimers();
-        // Advance past the MIN_SPEECH_INTERVAL_MS throttle (5 seconds)
-        vi.advanceTimersByTime(6_000);
+        // Advance past the MIN_SPEECH_INTERVAL_MS throttle (10 seconds)
+        vi.advanceTimersByTime(11_000);
         service.speak('straight ahead');
         vi.runAllTimers();
         expect(speakMock).toHaveBeenCalledTimes(2);
@@ -800,6 +800,215 @@ describe('FeedbackService – playTone resilience', () => {
     });
 });
 
+describe('FeedbackService – arrival feedback', () => {
+    let vibrateMock: ReturnType<typeof vi.fn>;
+    let speakMock: ReturnType<typeof vi.fn>;
+    let mockOscillator: {
+        connect: ReturnType<typeof vi.fn>;
+        type: string;
+        frequency: { setValueAtTime: ReturnType<typeof vi.fn> };
+        start: ReturnType<typeof vi.fn>;
+        stop: ReturnType<typeof vi.fn>;
+    };
+    let mockGain: {
+        connect: ReturnType<typeof vi.fn>;
+        gain: {
+            setValueAtTime: ReturnType<typeof vi.fn>;
+            linearRampToValueAtTime: ReturnType<typeof vi.fn>;
+        };
+    };
+    let mockAudioContext: {
+        currentTime: number;
+        destination: object;
+        createOscillator: ReturnType<typeof vi.fn>;
+        createGain: ReturnType<typeof vi.fn>;
+    };
+
+    beforeEach(() => {
+        // Vibration API
+        vibrateMock = vi.fn();
+        Object.defineProperty(navigator, 'vibrate', {
+            value: vibrateMock,
+            configurable: true,
+            writable: true,
+        });
+
+        // Speech API
+        speakMock = vi.fn();
+        vi.stubGlobal('speechSynthesis', { speak: speakMock });
+        vi.stubGlobal('SpeechSynthesisUtterance', function (text: string) {
+            return { text };
+        });
+
+        // localStorage: stub to prevent silentMode writes leaking into later tests
+        vi.stubGlobal('localStorage', { getItem: vi.fn(() => null), setItem: vi.fn() });
+
+        // Audio API
+        mockOscillator = {
+            connect: vi.fn(),
+            type: 'sine',
+            frequency: { setValueAtTime: vi.fn() },
+            start: vi.fn(),
+            stop: vi.fn(),
+        };
+        mockGain = {
+            connect: vi.fn(),
+            gain: {
+                setValueAtTime: vi.fn(),
+                linearRampToValueAtTime: vi.fn(),
+            },
+        };
+        mockAudioContext = {
+            currentTime: 0,
+            destination: {},
+            createOscillator: vi.fn(() => mockOscillator),
+            createGain: vi.fn(() => mockGain),
+        };
+        vi.stubGlobal(
+            'AudioContext',
+            vi.fn(() => mockAudioContext)
+        );
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (navigator as any).vibrate;
+    });
+
+    it('plays the arrival haptic pattern [200,100,200,100,200]', () => {
+        const service = createFeedbackService();
+        service.playArrivalFeedback();
+        expect(vibrateMock).toHaveBeenCalledWith([200, 100, 200, 100, 200]);
+    });
+
+    it('plays a lower-pitch audio tone (oscillator started)', () => {
+        const service = createFeedbackService();
+        service.playArrivalFeedback();
+        expect(mockAudioContext.createOscillator).toHaveBeenCalled();
+        expect(mockOscillator.start).toHaveBeenCalled();
+        expect(mockOscillator.stop).toHaveBeenCalled();
+    });
+
+    it('speaks "You\'ve arrived!" when not in silent mode', () => {
+        const service = createFeedbackService();
+        service.playArrivalFeedback();
+        const phrases = speakMock.mock.calls.map((c: unknown[]) => (c[0] as { text: string }).text);
+        expect(phrases).toContain("You've arrived!");
+    });
+
+    it('suppresses speech in silent mode but still plays haptic + tone', () => {
+        const service = createFeedbackService();
+        service.silentMode = true;
+        service.playArrivalFeedback();
+        // Speech suppressed
+        expect(speakMock).not.toHaveBeenCalled();
+        // Haptic still fires
+        expect(vibrateMock).toHaveBeenCalledWith([200, 100, 200, 100, 200]);
+        // Tone still fires
+        expect(mockAudioContext.createOscillator).toHaveBeenCalled();
+        expect(mockOscillator.start).toHaveBeenCalled();
+    });
+
+    it('plays haptic even when vibration is the only available channel', () => {
+        // Speech unavailable
+        vi.stubGlobal('speechSynthesis', undefined);
+        vi.stubGlobal('SpeechSynthesisUtterance', undefined);
+        const service = createFeedbackService();
+        service.playArrivalFeedback();
+        expect(vibrateMock).toHaveBeenCalledWith([200, 100, 200, 100, 200]);
+    });
+
+    it('does not throw when vibration API is absent', () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (navigator as any).vibrate;
+        const service = createFeedbackService();
+        expect(() => service.playArrivalFeedback()).not.toThrow();
+    });
+
+    it('does not throw when audio API is absent', () => {
+        vi.stubGlobal('AudioContext', undefined);
+        const service = createFeedbackService();
+        expect(() => service.playArrivalFeedback()).not.toThrow();
+    });
+});
+
+describe('FeedbackService – off-route feedback', () => {
+    let vibrateMock: ReturnType<typeof vi.fn>;
+    let speakMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        vibrateMock = vi.fn();
+        Object.defineProperty(navigator, 'vibrate', {
+            value: vibrateMock,
+            configurable: true,
+            writable: true,
+        });
+        speakMock = vi.fn();
+        vi.stubGlobal('speechSynthesis', { speak: speakMock });
+        vi.stubGlobal('SpeechSynthesisUtterance', function (text: string) {
+            return { text };
+        });
+        vi.stubGlobal('localStorage', { getItem: vi.fn(() => null), setItem: vi.fn() });
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (navigator as any).vibrate;
+    });
+
+    it('playOffRouteFeedback() vibrates with [100,50,100,50,100] pattern', () => {
+        const service = createFeedbackService();
+        service.playOffRouteFeedback();
+        expect(vibrateMock).toHaveBeenCalledWith([100, 50, 100, 50, 100]);
+    });
+
+    it('playOffRouteFeedback() announces "You\'re off the trail" when not in silent mode', () => {
+        const service = createFeedbackService();
+        service.playOffRouteFeedback();
+        const phrases = speakMock.mock.calls.map((c: unknown[]) => (c[0] as { text: string }).text);
+        expect(phrases).toContain("You're off the trail");
+    });
+
+    it('playOffRouteFeedback() suppresses speech in silent mode but still vibrates', () => {
+        const service = createFeedbackService();
+        service.silentMode = true;
+        service.playOffRouteFeedback();
+        expect(speakMock).not.toHaveBeenCalled();
+        expect(vibrateMock).toHaveBeenCalledWith([100, 50, 100, 50, 100]);
+    });
+
+    it('playOffRouteFeedback() does not throw when vibration API is absent', () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (navigator as any).vibrate;
+        const service = createFeedbackService();
+        expect(() => service.playOffRouteFeedback()).not.toThrow();
+    });
+
+    it('playBackOnTrackFeedback() announces "Back on track" when not in silent mode', () => {
+        const service = createFeedbackService();
+        service.playBackOnTrackFeedback();
+        const phrases = speakMock.mock.calls.map((c: unknown[]) => (c[0] as { text: string }).text);
+        expect(phrases).toContain('Back on track');
+    });
+
+    it('playBackOnTrackFeedback() suppresses speech in silent mode', () => {
+        const service = createFeedbackService();
+        service.silentMode = true;
+        service.playBackOnTrackFeedback();
+        expect(speakMock).not.toHaveBeenCalled();
+    });
+
+    it('playBackOnTrackFeedback() does not throw when speech is unavailable', () => {
+        vi.unstubAllGlobals();
+        vi.stubGlobal('speechSynthesis', undefined);
+        vi.stubGlobal('SpeechSynthesisUtterance', undefined);
+        const service = createFeedbackService();
+        expect(() => service.playBackOnTrackFeedback()).not.toThrow();
+    });
+});
+
 describe('FeedbackService – direction throttle', () => {
     let speakMock: ReturnType<typeof vi.fn>;
 
@@ -818,27 +1027,27 @@ describe('FeedbackService – direction throttle', () => {
         vi.unstubAllGlobals();
     });
 
-    it('throttles: second speak() call within 5s is suppressed', () => {
+    it('throttles: second speak() call within 10s is suppressed', () => {
         const service = createFeedbackService();
         service.speak('turn left');
         vi.runAllTimers(); // fires debounce; first direction spoken
         expect(speakMock).toHaveBeenCalledTimes(1);
 
-        // Wait 2 seconds (still within 5s throttle window)
+        // Wait 2 seconds (still within 10s throttle window)
         vi.advanceTimersByTime(2_000);
         service.speak('turn right');
         vi.runAllTimers(); // fires debounce but throttle blocks it
         expect(speakMock).toHaveBeenCalledTimes(1); // no additional call
     });
 
-    it('throttle resets after 5s — next speak() fires', () => {
+    it('throttle resets after 10s — next speak() fires', () => {
         const service = createFeedbackService();
         service.speak('turn left');
         vi.runAllTimers();
         expect(speakMock).toHaveBeenCalledTimes(1);
 
         // Advance past throttle window
-        vi.advanceTimersByTime(5_001);
+        vi.advanceTimersByTime(10_001);
         service.speak('turn right');
         vi.runAllTimers();
         expect(speakMock).toHaveBeenCalledTimes(2);

@@ -11,6 +11,9 @@ import {
     openSaveModal,
     mountSavedRoutesView,
     _resetModalOpen,
+    createOffCourseDetector,
+    majorTurnDirection,
+    updateStationaryBadge,
 } from './main';
 import { clearSession, appendBreadcrumb, listRoutes, saveRoute, deleteRoute } from './storage';
 import { setFontSize, FONT_SIZES } from './settings';
@@ -445,6 +448,47 @@ describe('mountNavigationView', () => {
         const hint = root.querySelector<HTMLElement>('#nav-calibration-hint');
         expect(hint?.hidden).toBe(true);
     });
+
+    it('compass arrow is inside nav-compass-corner (small indicator position)', () => {
+        const corner = root.querySelector('.nav-compass-corner');
+        expect(corner).not.toBeNull();
+        const arrow = corner?.querySelector('#nav-compass-arrow');
+        expect(arrow).not.toBeNull();
+    });
+
+    it('compass arrow has nav-compass-arrow class (48x48 CSS size)', () => {
+        const arrow = root.querySelector('#nav-compass-arrow');
+        expect(arrow?.classList.contains('nav-compass-arrow')).toBe(true);
+    });
+
+    it('distance and progress are inside nav-primary (primary content area)', () => {
+        const primary = root.querySelector('.nav-primary');
+        expect(primary).not.toBeNull();
+        const distanceEl = primary?.querySelector('#nav-distance-value');
+        const progressEl = primary?.querySelector('#nav-progress-text');
+        expect(distanceEl).not.toBeNull();
+        expect(progressEl).not.toBeNull();
+    });
+
+    it('nav-compass-corner is inside nav-trail-container (overlaid on the trail canvas)', () => {
+        const container = root.querySelector('.nav-trail-container');
+        expect(container).not.toBeNull();
+        const corner = container?.querySelector('.nav-compass-corner');
+        expect(corner).not.toBeNull();
+    });
+
+    it('renders the trail canvas element', () => {
+        const canvas = root.querySelector('#nav-trail-canvas');
+        expect(canvas).not.toBeNull();
+        expect(canvas?.tagName.toLowerCase()).toBe('canvas');
+    });
+
+    it('trail canvas is inside nav-trail-container inside nav-primary', () => {
+        const primary = root.querySelector('.nav-primary');
+        const container = primary?.querySelector('.nav-trail-container');
+        const canvas = container?.querySelector('#nav-trail-canvas');
+        expect(canvas).not.toBeNull();
+    });
 });
 
 describe('switchToNavigationView', () => {
@@ -653,6 +697,45 @@ describe('switchToNavigationView – live navigation', () => {
 
         const hint = root.querySelector<HTMLElement>('#nav-calibration-hint');
         expect(hint?.hidden).toBe(false);
+    });
+
+    it('does not call speak on compass heading changes (no per-heading direction announcements)', async () => {
+        await appendBreadcrumb({ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 });
+        await appendBreadcrumb({ lat: 51.501, lng: -0.1, accuracy: 5, timestamp: 2000 });
+
+        const speakSpy = vi.fn();
+        vi.stubGlobal('speechSynthesis', {
+            speak: speakSpy,
+            cancel: vi.fn(),
+            getVoices: () => [],
+        });
+
+        mountAppShell(root);
+        switchToNavigationView(root);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // Provide a GPS fix to set currentPos
+        watchPositionCallback({
+            coords: { latitude: 51.495, longitude: -0.1, accuracy: 5 },
+            timestamp: 3000,
+        } as GeolocationPosition);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        speakSpy.mockClear();
+
+        // Fire multiple compass heading changes
+        for (let alpha = 0; alpha < 360; alpha += 45) {
+            const event = new Event('deviceorientation') as DeviceOrientationEvent & {
+                alpha: number;
+            };
+            Object.defineProperty(event, 'alpha', { value: alpha, configurable: true });
+            window.dispatchEvent(event);
+        }
+
+        // No speech should have been triggered by heading changes alone
+        expect(speakSpy).not.toHaveBeenCalled();
+
+        vi.unstubAllGlobals();
     });
 
     it('shows "You\'ve arrived!" when last breadcrumb is reached', async () => {
@@ -1224,5 +1307,249 @@ describe('Accessibility controls bar', () => {
         mountAppShell(root);
         const btn = root.querySelector<HTMLButtonElement>('#btn-font-up');
         expect(btn?.disabled).toBe(true);
+    });
+});
+
+describe('createOffCourseDetector – sustained off-course detection', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('returns false when bearing delta is within threshold (on course)', () => {
+        const detector = createOffCourseDetector();
+        // 30° delta — within 60° threshold
+        expect(detector.check(30)).toBe(false);
+        expect(detector.check(-30)).toBe(false);
+        expect(detector.check(0)).toBe(false);
+    });
+
+    it('returns false when bearing delta exactly equals threshold', () => {
+        const detector = createOffCourseDetector();
+        // 60° is NOT over the threshold (threshold is strictly > 60)
+        expect(detector.check(60)).toBe(false);
+        expect(detector.check(-60)).toBe(false);
+    });
+
+    it('does not fire on the first off-course fix', () => {
+        const detector = createOffCourseDetector();
+        // 90° delta — over threshold, but only 1 fix
+        expect(detector.check(90)).toBe(false);
+    });
+
+    it('does not fire on second consecutive off-course fix', () => {
+        const detector = createOffCourseDetector();
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+    });
+
+    it('fires on the 3rd consecutive off-course fix', () => {
+        const detector = createOffCourseDetector();
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(true); // 3rd fix triggers
+    });
+
+    it('fires when off-course for 3+ seconds even with fewer than 3 fixes', () => {
+        const detector = createOffCourseDetector();
+        vi.setSystemTime(0);
+        expect(detector.check(90)).toBe(false); // fix 1 at t=0
+        vi.setSystemTime(3100); // 3.1 seconds later
+        expect(detector.check(90)).toBe(true); // fix 2, but 3s elapsed
+    });
+
+    it('resets after firing so it can trigger again', () => {
+        const detector = createOffCourseDetector();
+        // Trigger first warning
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(true);
+        // Should not fire again immediately (counter reset)
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(true); // fires again after 3 more fixes
+    });
+
+    it('resets consecutive count when back on course', () => {
+        const detector = createOffCourseDetector();
+        expect(detector.check(90)).toBe(false); // fix 1 off-course
+        expect(detector.check(90)).toBe(false); // fix 2 off-course
+        expect(detector.check(10)).toBe(false); // back on course — resets
+        expect(detector.check(90)).toBe(false); // fix 1 again (fresh start)
+        expect(detector.check(90)).toBe(false); // fix 2
+        expect(detector.check(90)).toBe(true); // fix 3 triggers
+    });
+
+    it('reset() clears state so detection restarts fresh', () => {
+        const detector = createOffCourseDetector();
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+        detector.reset(); // externally reset (e.g. breadcrumb advanced)
+        // After reset, need 3 more fixes to trigger
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(true);
+    });
+
+    it('handles negative off-course bearing deltas', () => {
+        const detector = createOffCourseDetector();
+        // -90° is off course (turn left)
+        expect(detector.check(-90)).toBe(false);
+        expect(detector.check(-90)).toBe(false);
+        expect(detector.check(-90)).toBe(true);
+    });
+
+    it('handles 180° (wrong way) bearing delta', () => {
+        const detector = createOffCourseDetector();
+        expect(detector.check(180)).toBe(false);
+        expect(detector.check(180)).toBe(false);
+        expect(detector.check(180)).toBe(true);
+    });
+
+    it('uses custom minFixes parameter', () => {
+        const detector = createOffCourseDetector(5, 10000); // 5 fixes required
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(false);
+        expect(detector.check(90)).toBe(true); // 5th fix fires
+    });
+
+    it('uses custom deltaThreshold parameter', () => {
+        const detector = createOffCourseDetector(3, 3000, 45); // 45° threshold
+        // 50° should be off-course with threshold=45
+        expect(detector.check(50)).toBe(false);
+        expect(detector.check(50)).toBe(false);
+        expect(detector.check(50)).toBe(true);
+    });
+});
+
+describe('majorTurnDirection', () => {
+    // Helper: create a Breadcrumb at given lat/lng
+    function bc(
+        lat: number,
+        lng: number
+    ): { lat: number; lng: number; accuracy: number; timestamp: number } {
+        return { lat, lng, accuracy: 5, timestamp: 0 };
+    }
+
+    it('returns null when the new leg is straight ahead (< 90° turn)', () => {
+        // Walking north, new leg also north — no turn
+        const fromPos = bc(51.5, -0.1);
+        const prevTarget = bc(51.501, -0.1); // north of fromPos
+        const newTarget = bc(51.502, -0.1); // north of prevTarget
+        expect(majorTurnDirection(fromPos, prevTarget, newTarget)).toBeNull();
+    });
+
+    it('returns "turn right" when new leg is clearly right (SE) of previous north leg', () => {
+        // Walking north, then turning south-east (> 90° right)
+        const fromPos = bc(51.5, -0.1);
+        const prevTarget = bc(51.501, -0.1); // due north (~0°)
+        const newTarget = bc(51.5, -0.08); // SE from prevTarget: south and east (~135°)
+        const result = majorTurnDirection(fromPos, prevTarget, newTarget);
+        expect(result).toBe('turn right');
+    });
+
+    it('returns "turn left" when new leg is clearly left (SW) of previous north leg', () => {
+        // Walking north, then turning south-west (> 90° left)
+        const fromPos = bc(51.5, -0.1);
+        const prevTarget = bc(51.501, -0.1); // due north (~0°)
+        const newTarget = bc(51.5, -0.12); // SW from prevTarget: south and west (~225° = -135°)
+        const result = majorTurnDirection(fromPos, prevTarget, newTarget);
+        expect(result).toBe('turn left');
+    });
+
+    it('returns null for a 45° right turn (less than 90°)', () => {
+        // Walking north then slight diagonal NE — 45° is not a major turn
+        const fromPos = bc(51.5, -0.1);
+        const prevTarget = bc(51.501, -0.1);
+        // ~45° NE: equal lat and lng change
+        const newTarget = bc(51.5017, -0.0895);
+        const result = majorTurnDirection(fromPos, prevTarget, newTarget);
+        expect(result).toBeNull();
+    });
+
+    it('returns "turn right" for a U-turn to the right (180°)', () => {
+        // Walking north, then doubling back south — massive right or left turn
+        const fromPos = bc(51.5, -0.1);
+        const prevTarget = bc(51.501, -0.1);
+        // New target is directly south of prevTarget
+        const newTarget = bc(51.5, -0.1); // back where we came from
+        const result = majorTurnDirection(fromPos, prevTarget, newTarget);
+        // 180° u-turn: delta normalises to ±180, which is > 90 or < -90
+        expect(result === 'turn right' || result === 'turn left').toBe(true);
+    });
+
+    it('returns null for a roughly 45° right diagonal (not a major turn)', () => {
+        // Walking north, then turning NE (~45° right) — not a major turn
+        const fromPos = bc(51.5, -0.1);
+        const prevTarget = bc(51.501, -0.1); // due north
+        const newTarget = bc(51.5017, -0.0895); // NE: roughly equal lat/lng change → ~45° turn
+        expect(majorTurnDirection(fromPos, prevTarget, newTarget)).toBeNull();
+    });
+
+    it('returns "turn right" for a south-east turn (>90° right)', () => {
+        // Walking north, then abruptly turning south-east
+        const fromPos = bc(51.5, -0.1);
+        const prevTarget = bc(51.502, -0.1); // north
+        const newTarget = bc(51.499, -0.07); // south-east of prevTarget → big right turn
+        expect(majorTurnDirection(fromPos, prevTarget, newTarget)).toBe('turn right');
+    });
+});
+
+describe('updateStationaryBadge', () => {
+    let root: HTMLElement;
+
+    beforeEach(() => {
+        root = document.createElement('div');
+        document.body.appendChild(root);
+        mountAppShell(root);
+        return () => {
+            document.body.removeChild(root);
+        };
+    });
+
+    it('stationary badge is rendered in the app shell', () => {
+        const badge = root.querySelector('#stationary-badge');
+        expect(badge).not.toBeNull();
+    });
+
+    it('stationary badge is hidden by default', () => {
+        const badge = root.querySelector<HTMLElement>('#stationary-badge');
+        expect(badge?.hidden).toBe(true);
+    });
+
+    it('shows the badge when isStationary is true', () => {
+        updateStationaryBadge(root, true);
+        const badge = root.querySelector<HTMLElement>('#stationary-badge');
+        expect(badge?.hidden).toBe(false);
+    });
+
+    it('hides the badge when isStationary is false', () => {
+        // First show it
+        updateStationaryBadge(root, true);
+        // Then hide it
+        updateStationaryBadge(root, false);
+        const badge = root.querySelector<HTMLElement>('#stationary-badge');
+        expect(badge?.hidden).toBe(true);
+    });
+
+    it('badge contains "Stationary" text', () => {
+        const badge = root.querySelector<HTMLElement>('#stationary-badge');
+        expect(badge?.textContent?.trim()).toContain('Stationary');
+    });
+
+    it('badge has aria-live attribute for accessibility', () => {
+        const badge = root.querySelector<HTMLElement>('#stationary-badge');
+        expect(badge?.getAttribute('aria-live')).toBe('polite');
+    });
+
+    it('does nothing when badge element is absent', () => {
+        const emptyRoot = document.createElement('div');
+        // Should not throw even if #stationary-badge is not in DOM
+        expect(() => updateStationaryBadge(emptyRoot, true)).not.toThrow();
     });
 });

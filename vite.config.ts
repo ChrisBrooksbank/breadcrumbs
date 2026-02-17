@@ -8,6 +8,7 @@ export default defineConfig({
         VitePWA({
             registerType: 'autoUpdate',
             workbox: {
+                cacheId: 'breadcrumbs-v2',
                 globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
             },
             manifest: {

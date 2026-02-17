@@ -74,6 +74,13 @@ export interface FeedbackService {
     playConfirmationBeep(): void;
     /** Play a proximity alert tone as the user approaches the target breadcrumb. */
     playProximityAlert(): void;
+    /**
+     * Play arrival feedback when navigation completes.
+     * - Spoken "You've arrived!" (suppressed in silent mode)
+     * - Distinct haptic triple-pulse `[200, 100, 200, 100, 200]` (always fires)
+     * - Lower-pitch confirmation tone (always fires)
+     */
+    playArrivalFeedback(): void;
     /** Whether the Web Audio API is available in this environment. */
     readonly audioAvailable: boolean;
     /**
@@ -90,6 +97,19 @@ export interface FeedbackService {
     vibrateProximity(distanceMeters: number): void;
     /** Whether the Vibration API is available in this environment. */
     readonly vibrationAvailable: boolean;
+    /**
+     * Play off-route feedback when the user strays > 30m from the trail.
+     * - Voice: "You're off the trail" (suppressed in silent mode)
+     * - Haptic: distinct pattern `[100, 50, 100, 50, 100]` (always fires)
+     * No-ops when speech/vibration are unavailable.
+     */
+    playOffRouteFeedback(): void;
+    /**
+     * Play back-on-track feedback when the user returns within 30m of the trail.
+     * - Voice: "Back on track" (suppressed in silent mode)
+     * No-ops when speech is unavailable.
+     */
+    playBackOnTrackFeedback(): void;
     /**
      * Cancel any pending debounced direction announcement.
      * Call when stopping navigation to prevent stale speech firing.
@@ -110,7 +130,7 @@ export interface FeedbackService {
 const SILENT_MODE_KEY = 'breadcrumbs:silentMode';
 
 /** Minimum milliseconds between any two speech announcements. */
-const MIN_SPEECH_INTERVAL_MS = 5_000;
+const MIN_SPEECH_INTERVAL_MS = 10_000;
 
 /**
  * Milliseconds of silence before a pending direction (speak) fires.
@@ -189,6 +209,17 @@ export function createFeedbackService(): FeedbackService {
         playTone(660, 0.1, 0.3);
     }
 
+    function playArrivalFeedback(): void {
+        // Haptic + tone fire even in silent mode (celebratory arrival signal)
+        vibrate([200, 100, 200, 100, 200]);
+        // Lower-pitch, longer tone — distinct from breadcrumb-advance beep
+        playTone(440, 0.6, 0.5);
+        // Speech only when not in silent mode
+        if (!_silentMode) {
+            announce("You've arrived!");
+        }
+    }
+
     // Tracks which threshold phrases have already been announced for the current target
     const announced = new Set<string>();
 
@@ -241,6 +272,22 @@ export function createFeedbackService(): FeedbackService {
 
     function resetDistanceAnnouncements(): void {
         announced.clear();
+    }
+
+    function playOffRouteFeedback(): void {
+        // Haptic fires even in silent mode — distinct off-route pattern
+        vibrate([100, 50, 100, 50, 100]);
+        // Speech only when not in silent mode
+        if (!_silentMode) {
+            announce("You're off the trail");
+        }
+    }
+
+    function playBackOnTrackFeedback(): void {
+        // Speech only when not in silent mode
+        if (!_silentMode) {
+            announce('Back on track');
+        }
     }
 
     function cancelPending(): void {
@@ -302,6 +349,9 @@ export function createFeedbackService(): FeedbackService {
         cancelPending,
         playConfirmationBeep,
         playProximityAlert,
+        playArrivalFeedback,
+        playOffRouteFeedback,
+        playBackOnTrackFeedback,
         vibrateAlignment,
         vibrateProximity,
         get speechAvailable() {

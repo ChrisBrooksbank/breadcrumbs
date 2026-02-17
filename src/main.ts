@@ -1,5 +1,7 @@
 import './styles.css';
 import { createGeolocationService } from '@/gps';
+import { createTrailRenderer } from '@/trail-renderer';
+import type { TrailRenderer } from '@/trail-renderer';
 import {
     appendBreadcrumb,
     getSession,
@@ -10,7 +12,7 @@ import {
 } from '@/storage';
 import { haversineMeters, bearingDegrees } from '@/geo';
 import { createNavigationService, createCompassService } from '@/navigation';
-import { createFeedbackService, classifyDirection } from '@/feedback';
+import { createFeedbackService } from '@/feedback';
 import {
     initSettings,
     getFontSize,
@@ -117,6 +119,9 @@ export function mountAppShell(root: HTMLElement): void {
                         <span class="stat-label">walked</span>
                     </div>
                 </div>
+                <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
+                    Stationary
+                </div>
             </div>
             <div class="actions" role="group" aria-label="Route actions">
                 <button
@@ -197,6 +202,13 @@ function updateStats(root: HTMLElement, elapsedSeconds: number, totalMeters: num
     }
 }
 
+export function updateStationaryBadge(root: HTMLElement, isStationary: boolean): void {
+    const badge = root.querySelector<HTMLElement>('#stationary-badge');
+    if (badge) {
+        badge.hidden = !isStationary;
+    }
+}
+
 function setStatusRequesting(root: HTMLElement): void {
     const badge = root.querySelector('#status-badge');
     const statusText = root.querySelector('#status-text');
@@ -244,23 +256,30 @@ export function mountNavigationView(root: HTMLElement): void {
         ${renderA11yControls()}
         <main>
             <div class="nav-view">
-                <div class="nav-compass-container" aria-label="Compass direction indicator">
-                    <svg class="nav-compass-arrow" id="nav-compass-arrow"
-                        viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"
-                        aria-hidden="true">
-                        <polygon points="50,5 62,70 50,60 38,70" class="compass-north"/>
-                        <polygon points="50,95 62,30 50,40 38,30" class="compass-south"/>
-                    </svg>
-                    <p class="nav-calibration-hint" id="nav-calibration-hint" hidden>
-                        Move your phone in a figure-8 to calibrate compass
-                    </p>
-                </div>
-                <div class="nav-distance-display">
-                    <span class="nav-distance-value" id="nav-distance-value">--</span>
-                    <span class="nav-distance-label">to next point</span>
-                </div>
-                <div class="nav-progress" id="nav-progress" aria-live="polite">
-                    <span id="nav-progress-text">Loading&hellip;</span>
+                <div class="nav-primary">
+                    <div class="nav-trail-container">
+                        <canvas class="nav-trail-canvas" id="nav-trail-canvas" aria-label="Trail map"></canvas>
+                        <div class="nav-trail-overlay">
+                            <div class="nav-distance-display">
+                                <span class="nav-distance-value" id="nav-distance-value">--</span>
+                                <span class="nav-distance-label">to next point</span>
+                            </div>
+                            <div class="nav-progress" id="nav-progress" aria-live="polite">
+                                <span id="nav-progress-text">Loading&hellip;</span>
+                            </div>
+                        </div>
+                        <div class="nav-compass-corner" aria-label="Compass direction indicator">
+                            <svg class="nav-compass-arrow" id="nav-compass-arrow"
+                                viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"
+                                aria-hidden="true">
+                                <polygon points="50,5 62,70 50,60 38,70" class="compass-north"/>
+                                <polygon points="50,95 62,30 50,40 38,30" class="compass-south"/>
+                            </svg>
+                            <p class="nav-calibration-hint" id="nav-calibration-hint" hidden>
+                                Move your phone in a figure-8 to calibrate compass
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>
@@ -302,6 +321,89 @@ function showNavArrived(root: HTMLElement): void {
     if (arrow) arrow.style.opacity = '0.3';
 }
 
+/**
+ * Detects if advancing to a new navigation leg requires a major turn (> 90°).
+ *
+ * @param fromPos    The current GPS position (where the user just was)
+ * @param prevTarget The breadcrumb just reached
+ * @param newTarget  The next target breadcrumb
+ * @returns 'turn left', 'turn right', or null if no major turn
+ */
+export function majorTurnDirection(
+    fromPos: Breadcrumb,
+    prevTarget: Breadcrumb,
+    newTarget: Breadcrumb
+): 'turn left' | 'turn right' | null {
+    const prevBearing = bearingDegrees(fromPos, prevTarget);
+    const newBearing = bearingDegrees(prevTarget, newTarget);
+
+    // Compute the signed angular difference from prevBearing to newBearing
+    let delta = newBearing - prevBearing;
+    // Normalise to -180..+180
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+
+    if (delta > 90) return 'turn right';
+    if (delta < -90) return 'turn left';
+    return null;
+}
+
+/** Detects sustained off-course heading across consecutive GPS fixes. */
+export interface OffCourseDetector {
+    /**
+     * Call on each GPS update with the bearing delta (target bearing minus
+     * compass heading). Returns true when the off-course warning should fire.
+     */
+    check(bearingDelta: number): boolean;
+    /** Reset state (e.g. when advancing to the next breadcrumb). */
+    reset(): void;
+}
+
+/**
+ * Factory for sustained off-course detection.
+ * Triggers only when |bearingDelta| > 60° for 3+ consecutive fixes OR 3+ seconds.
+ * After triggering, resets so it can fire again on the next sustained stretch.
+ */
+export function createOffCourseDetector(
+    minFixes = 3,
+    minMs = 3000,
+    deltaThreshold = 60
+): OffCourseDetector {
+    let consecutiveCount = 0;
+    let firstTime: number | null = null;
+
+    function check(bearingDelta: number): boolean {
+        // Normalize to -180..+180
+        const delta = (((bearingDelta % 360) + 540) % 360) - 180;
+        const isOffCourse = Math.abs(delta) > deltaThreshold;
+
+        if (isOffCourse) {
+            consecutiveCount++;
+            if (firstTime === null) {
+                firstTime = Date.now();
+            }
+            const elapsed = Date.now() - firstTime;
+            if (consecutiveCount >= minFixes || elapsed >= minMs) {
+                // Reset so we don't re-fire on every subsequent fix
+                consecutiveCount = 0;
+                firstTime = null;
+                return true;
+            }
+        } else {
+            consecutiveCount = 0;
+            firstTime = null;
+        }
+        return false;
+    }
+
+    function reset(): void {
+        consecutiveCount = 0;
+        firstTime = null;
+    }
+
+    return { check, reset };
+}
+
 export function switchToNavigationView(
     root: HTMLElement,
     breadcrumbsOverride?: Breadcrumb[]
@@ -330,6 +432,23 @@ export function switchToNavigationView(
 
     let currentPos: Breadcrumb | null = null;
     let bearingToBreadcrumb: number | null = null;
+    let trailBreadcrumbs: Breadcrumb[] = [];
+
+    const offCourseDetector = createOffCourseDetector();
+
+    // Trail renderer — initialised once breadcrumbs are loaded
+    let trailRenderer: TrailRenderer | null = null;
+
+    function renderTrail(): void {
+        if (!trailRenderer || trailBreadcrumbs.length === 0) return;
+        trailRenderer.render({
+            trail: trailBreadcrumbs,
+            currentIndex: nav.progress.currentIndex,
+            currentPosition: currentPos,
+            compassHeading: compass.compassHeading,
+            isOffRoute: nav.isOffRoute,
+        });
+    }
 
     function refreshArrow(): void {
         const target = nav.targetBreadcrumb;
@@ -351,9 +470,9 @@ export function switchToNavigationView(
     compass.onHeadingChange = () => {
         refreshArrow();
         refreshCalibrationHint();
+        renderTrail();
         if (bearingToBreadcrumb !== null && compass.compassHeading !== null) {
             const bearingDelta = bearingToBreadcrumb - compass.compassHeading;
-            feedback.speak(classifyDirection(bearingDelta));
             feedback.vibrateAlignment(bearingDelta);
         }
     };
@@ -380,6 +499,18 @@ export function switchToNavigationView(
                 nav.load(breadcrumbs);
             }
 
+            // Store trail for rendering (nav.load() reverses, nav.loadForward() doesn't)
+            // We always render the trail in the order that NavigationService uses it.
+            // Access the ordered trail via nav.progress and nav.targetBreadcrumb won't give us
+            // the full list, so we reconstruct from breadcrumbs + navigation mode.
+            trailBreadcrumbs = followMode ? breadcrumbs : [...breadcrumbs].reverse();
+
+            // Initialise trail renderer
+            const canvas = root.querySelector<HTMLCanvasElement>('#nav-trail-canvas');
+            if (canvas) {
+                trailRenderer = createTrailRenderer({ canvas });
+            }
+
             const progress = nav.progress;
             updateNavProgress(root, progress.currentIndex + 1, progress.total);
 
@@ -388,6 +519,15 @@ export function switchToNavigationView(
 
             compass.start();
 
+            nav.onOffRouteChange = (offRoute: boolean) => {
+                if (offRoute) {
+                    feedback.playOffRouteFeedback();
+                } else {
+                    feedback.playBackOnTrackFeedback();
+                }
+                renderTrail();
+            };
+
             navGps.start(
                 (breadcrumb: Breadcrumb) => {
                     currentPos = breadcrumb;
@@ -395,6 +535,7 @@ export function switchToNavigationView(
                     if (nav.progress.arrived) {
                         showNavArrived(root);
                         feedback.cancelPending();
+                        feedback.playArrivalFeedback();
                         navGps.stop();
                         compass.stop();
                         return;
@@ -408,25 +549,47 @@ export function switchToNavigationView(
                         feedback.vibrateProximity(dist);
                     }
 
+                    const prevTarget = nav.targetBreadcrumb;
                     const advanced = nav.advanceIfClose(breadcrumb);
                     if (advanced) {
                         feedback.playConfirmationBeep();
                         feedback.resetDistanceAnnouncements();
+                        offCourseDetector.reset();
                         if (nav.progress.arrived) {
                             showNavArrived(root);
                             feedback.cancelPending();
+                            feedback.playArrivalFeedback();
                             navGps.stop();
                             compass.stop();
                         } else {
                             const p = nav.progress;
                             updateNavProgress(root, p.currentIndex + 1, p.total);
+                            // Announce major turn (> 90°) when the new leg requires it
+                            const newTarget = nav.targetBreadcrumb;
+                            if (prevTarget && newTarget) {
+                                const turn = majorTurnDirection(breadcrumb, prevTarget, newTarget);
+                                if (turn) {
+                                    feedback.announce(turn);
+                                }
+                            }
                         }
                     } else {
                         const p = nav.progress;
                         updateNavProgress(root, p.currentIndex + 1, p.total);
+                        // Check for sustained off-course heading on GPS updates
+                        if (bearingToBreadcrumb !== null && compass.compassHeading !== null) {
+                            if (
+                                offCourseDetector.check(
+                                    bearingToBreadcrumb - compass.compassHeading
+                                )
+                            ) {
+                                feedback.speak("you're going the wrong way");
+                            }
+                        }
                     }
 
                     refreshArrow();
+                    renderTrail();
                 },
                 () => {
                     const progressText = root.querySelector('#nav-progress-text');
@@ -822,6 +985,8 @@ export function startRecording(root: HTMLElement): void {
                 totalMeters += haversineMeters(lastBreadcrumb, breadcrumb);
             }
             lastBreadcrumb = breadcrumb;
+
+            updateStationaryBadge(root, gps.isStationary);
 
             if (breadcrumbCount === 1) {
                 setStatusRecording(root);
