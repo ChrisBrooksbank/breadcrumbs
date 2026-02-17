@@ -2,7 +2,7 @@
 
 ## Status
 
-- Planning iterations: 22
+- Planning iterations: 23
 - Build iterations: 0
 - Last updated: 2026-02-17
 
@@ -60,6 +60,45 @@
 - [x] Implement delete saved route with confirmation dialog (spec: saved-routes.md)
 - [x] Write unit tests for route persistence, listing, and deletion via storage.ts (spec: saved-routes.md)
 
+### Phase 6: Compass Smoothing (spec: compass-smoothing.md)
+
+- [ ] Add exponential moving average (EMA) smoothing to compass heading in `src/navigation.ts`: wrap raw heading values with `smoothHeading(raw)` using alpha ~0.2; handle 0°/360° wraparound using shortest-arc interpolation (spec: compass-smoothing.md)
+- [ ] Clamp compass update rate to ~10fps in `CompassService.onHeadingChange` — skip intermediate events to reduce DOM thrashing (spec: compass-smoothing.md)
+- [ ] Add CSS transition to compass arrow SVG rotation (`transition: transform 300ms ease-out`) for visual smoothness between JS updates (spec: compass-smoothing.md)
+- [ ] Reduce compass arrow size in navigation view: change from dominant element to small 48x48px indicator; reposition to corner of navigation area (spec: compass-smoothing.md)
+- [ ] Write unit tests for heading smoothing: verify EMA output, wraparound handling (359°→1° transition), and that smoothed heading converges to raw heading within 500ms of a 90° turn (spec: compass-smoothing.md)
+
+### Phase 7: Voice Feedback Tuning (spec: voice-tuning.md)
+
+- [ ] Remove per-heading-change direction announcements from navigation loop in `main.ts`; stop calling `speak(classifyDirection(...))` on every `compass.onHeadingChange` (spec: voice-tuning.md)
+- [ ] Add sustained off-course detection: track bearing delta over consecutive GPS updates; only trigger "you're going the wrong way" when delta > 60° for 3+ consecutive fixes or 3+ seconds (spec: voice-tuning.md)
+- [ ] Add major-turn announcement: when advancing to next breadcrumb, compare bearing of new leg vs previous leg; announce direction if turn > 90° (spec: voice-tuning.md)
+- [ ] Increase `MIN_SPEECH_INTERVAL_MS` from 5000ms to 10000ms in `src/feedback.ts` (spec: voice-tuning.md)
+- [ ] Add arrival feedback: spoken "You've arrived!" announcement, distinct haptic pattern `[200, 100, 200, 100, 200]`, and lower-pitch confirmation tone when navigation completes; fire haptic+tone even in silent mode (spec: voice-tuning.md)
+- [ ] Write unit tests for sustained off-course detection logic, major-turn detection, and arrival feedback triggers (spec: voice-tuning.md)
+
+### Phase 8: Trail View Navigation (spec: trail-view.md)
+
+- [ ] Create `src/trail-renderer.ts` — Canvas 2D trail renderer: project lat/lng to local x/y using equirectangular projection; draw breadcrumb polyline with walked (grey) and remaining (blue) segments (spec: trail-view.md)
+- [ ] Add Catmull-Rom spline interpolation to trail renderer for smooth "wiggly line" appearance between breadcrumb points (spec: trail-view.md)
+- [ ] Implement auto-zoom: calculate bounding box of remaining route + current position, apply 15% padding, smooth zoom transitions; minimum 3 upcoming breadcrumbs always visible (spec: trail-view.md)
+- [ ] Implement heading-up rotation: rotate entire canvas by `-compassHeading` so direction of travel points up (spec: trail-view.md)
+- [ ] Render current position dot (prominent, e.g. blue circle) and next-target waypoint (highlighted) on the trail canvas (spec: trail-view.md)
+- [ ] Integrate trail canvas into navigation view in `main.ts`: replace large compass as primary element; overlay distance text and progress indicator; keep small compass arrow in corner (spec: trail-view.md)
+- [ ] Implement off-route detection in `src/navigation.ts`: calculate perpendicular distance from current position to nearest trail segment; trigger warning at >30m with debounce (3+ consecutive fixes) (spec: trail-view.md)
+- [ ] Add off-route feedback: voice "You're off the trail" / "Back on track" announcements, distinct haptic pattern `[100, 50, 100, 50, 100]`, change position dot color to red when off-route (spec: trail-view.md)
+- [ ] Handle `devicePixelRatio` for crisp canvas rendering on high-DPI screens; throttle redraws to requestAnimationFrame (spec: trail-view.md)
+- [ ] Write unit tests for: equirectangular projection, bounding box calculation, point-to-segment distance, off-route detection with debounce (spec: trail-view.md)
+
+### Phase 9: Adaptive GPS & Battery (spec: adaptive-gps.md)
+
+- [ ] Add movement bearing tracking to `src/gps.ts`: calculate bearing between consecutive raw GPS fixes (not just accepted breadcrumbs) using `bearingDegrees()` from `geo.ts` (spec: adaptive-gps.md)
+- [ ] Implement adaptive breadcrumb threshold in `src/gps.ts`: on turns (bearing change > 30°) reduce distance threshold to 5m; on straight stretches (bearing change < 15° for 3+ fixes) increase to 20m; enforce 50m maximum gap (spec: adaptive-gps.md)
+- [ ] Implement stationary detection in `src/gps.ts`: if position hasn't changed by >5m for 30 seconds, switch to low-power polling by setting `maximumAge: 10000` in geolocation options (spec: adaptive-gps.md)
+- [ ] Resume high-accuracy polling when movement detected (position change > 5m from stationary point); ensure resumption within 5 seconds (spec: adaptive-gps.md)
+- [ ] Add battery-saving UI indicator on recording screen: show "Low power" badge when in stationary/low-power mode (spec: adaptive-gps.md)
+- [ ] Write unit tests for: adaptive threshold calculation based on bearing change, stationary detection trigger, low-power mode transitions (spec: adaptive-gps.md)
+
 ## Completed
 
 <!-- Completed tasks move here -->
@@ -85,9 +124,11 @@
 - **Storage**: IndexedDB for breadcrumbs and saved routes (survives cache clear); localStorage for user preferences (mode toggle)
 - **PWA**: vite-plugin-pwa ^1.2.0 (required for Vite 6 compatibility)
 - **Testing**: Vitest with jsdom; mock `navigator.geolocation`, `DeviceOrientationEvent`, `speechSynthesis`, `vibrate`
-- **Priority order**: PWA Shell → GPS Recording → Retrace Navigation → Multi-Modal Feedback → Saved Routes
-    - Each phase depends on the prior (you can't retrace without recording; feedback requires navigation)
-    - Saved Routes is lowest priority — app is usable without it
+- **Priority order**: PWA Shell → GPS Recording → Retrace Navigation → Multi-Modal Feedback → Saved Routes → Compass Smoothing → Voice Tuning → Trail View → Adaptive GPS
+    - Phases 1–5 complete. Phases 6–9 from field test feedback (2026-02-17 retrace walk).
+    - Phase 6 (compass smoothing) and 7 (voice tuning) are bug fixes — do first
+    - Phase 8 (trail view) is the biggest new feature — depends on smooth compass (Phase 6)
+    - Phase 9 (adaptive GPS) is independent and can be done in parallel with Phase 8
 - **types.ts first**: shared types extracted to their own file to avoid circular imports between gps.ts, storage.ts, navigation.ts
 - **`idb` package**: `idb` is a transitive dependency only (via workbox-build); do NOT import it directly without `npm install idb`. For storage.ts: either `npm install idb` as a direct dependency, or use raw IndexedDB API. For tests: use `fake-indexeddb` (install as devDependency).
 - **`fake-indexeddb`**: install as devDependency for storage.ts unit tests; provides in-memory IndexedDB compatible with jsdom
