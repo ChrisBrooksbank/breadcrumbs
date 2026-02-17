@@ -2,7 +2,7 @@
 
 ## Status
 
-- Planning iterations: 3
+- Planning iterations: 4
 - Build iterations: 0
 - Last updated: 2026-02-17
 
@@ -10,9 +10,9 @@
 
 ### Phase 1: PWA Shell (spec: pwa-shell.md)
 
-- [ ] Wire up src/main.ts: replace placeholder with real app shell DOM (title, recording status card, action buttons placeholder); add base CSS (large-font, high-contrast, touch-friendly 48px targets) (spec: pwa-shell.md)
+- [ ] Wire up src/main.ts: replace placeholder with real app shell DOM (title, recording status card, "Take me back" and "Save this route" action buttons); extract inline index.html CSS to src/styles.css and import in main.ts; ensure 48px minimum tap targets and high-contrast colors (spec: pwa-shell.md)
 - [ ] Generate placeholder app icons at 192x192 and 512x512 and place in public/icons/ (vite.config.ts already references these paths) (spec: pwa-shell.md)
-- [ ] Write Vitest unit tests for app shell mounting (verify DOM elements rendered, CSS classes applied) (spec: pwa-shell.md)
+- [ ] Write Vitest unit tests for app shell mounting (verify DOM elements rendered, buttons present) (spec: pwa-shell.md)
 
 ### Phase 2: GPS Recording (spec: gps-recording.md)
 
@@ -26,6 +26,7 @@
 - [ ] Update recording UI in index.html/main.ts: show "Recording..." badge, elapsed time, distance walked in large text (spec: gps-recording.md)
 - [ ] Handle GPS permission request with friendly prompt; show user-facing error message on denial/unavailable (spec: gps-recording.md)
 - [ ] Write unit tests for GPS breadcrumb filtering logic (distance threshold, accuracy filtering) (spec: gps-recording.md)
+- [ ] Write unit tests for GeolocationService: mock `navigator.geolocation`, verify watchPosition called with enableHighAccuracy, verify error callback invoked on denial (spec: gps-recording.md)
 
 ### Phase 3: Retrace Navigation (spec: retrace-navigation.md)
 
@@ -65,7 +66,7 @@
 
 ## Notes
 
-### Codebase State (as of iteration 2)
+### Codebase State (as of iteration 4)
 
 - `index.html`: exists with good PWA metadata, inline CSS, placeholder content — needs real app shell wired in
 - `src/main.ts`: placeholder only (console.log) — needs real app shell implementation
