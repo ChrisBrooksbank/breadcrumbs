@@ -1,9 +1,16 @@
 import './styles.css';
 import { createGeolocationService } from '@/gps';
-import { appendBreadcrumb, getSession, saveRoute, listRoutes, deleteRoute } from '@/storage';
+import {
+    appendBreadcrumb,
+    getSession,
+    saveRoute,
+    listRoutes,
+    deleteRoute,
+    clearSession,
+} from '@/storage';
 import { haversineMeters, bearingDegrees } from '@/geo';
 import { createNavigationService, createCompassService } from '@/navigation';
-import { createFeedbackService } from '@/feedback';
+import { createFeedbackService, classifyDirection } from '@/feedback';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
 export function mountAppShell(root: HTMLElement): void {
@@ -82,8 +89,12 @@ function setStatusRecording(root: HTMLElement): void {
 }
 
 export function formatElapsed(seconds: number): string {
-    const m = Math.floor(seconds / 60);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
     const s = seconds % 60;
+    if (h > 0) {
+        return `${String(h)}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
     return `${String(m)}:${String(s).padStart(2, '0')}`;
 }
 
@@ -257,6 +268,11 @@ export function switchToNavigationView(
     compass.onHeadingChange = () => {
         refreshArrow();
         refreshCalibrationHint();
+        if (bearingToBreadcrumb !== null && compass.compassHeading !== null) {
+            const bearingDelta = bearingToBreadcrumb - compass.compassHeading;
+            feedback.speak(classifyDirection(bearingDelta));
+            feedback.vibrateAlignment(bearingDelta);
+        }
     };
 
     const navGps = createGeolocationService();
@@ -302,10 +318,14 @@ export function switchToNavigationView(
                     if (target) {
                         const dist = haversineMeters(breadcrumb, target);
                         updateNavDistance(root, dist);
+                        feedback.announceDistance(dist);
+                        feedback.vibrateProximity(dist);
                     }
 
                     const advanced = nav.advanceIfClose(breadcrumb);
                     if (advanced) {
+                        feedback.playConfirmationBeep();
+                        feedback.resetDistanceAnnouncements();
                         if (nav.progress.arrived) {
                             showNavArrived(root);
                         } else {
@@ -380,7 +400,7 @@ export function openSaveModal(
     setTimeout(() => input?.focus(), 0);
 
     function closeModal(): void {
-        document.body.removeChild(backdrop);
+        backdrop.remove();
     }
 
     if (cancelBtn) {
@@ -413,8 +433,14 @@ export function openSaveModal(
                     onSaved?.();
                 })
                 .catch(() => {
-                    // Storage error — close modal anyway
-                    closeModal();
+                    const modal = backdrop.querySelector('.modal');
+                    if (modal && !modal.querySelector('.modal-error')) {
+                        const errorMsg = document.createElement('p');
+                        errorMsg.className = 'modal-error';
+                        errorMsg.style.color = '#dc2626';
+                        errorMsg.textContent = 'Could not save route. Please try again.';
+                        modal.appendChild(errorMsg);
+                    }
                 });
         });
     }
@@ -552,7 +578,7 @@ function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: (
     document.body.appendChild(backdrop);
 
     function closeDialog(): void {
-        document.body.removeChild(backdrop);
+        backdrop.remove();
     }
 
     const cancelBtn = backdrop.querySelector<HTMLButtonElement>('#btn-delete-cancel');
@@ -596,6 +622,8 @@ export function startRecording(root: HTMLElement): void {
         return;
     }
 
+    clearSession();
+
     setStatusRequesting(root);
     let gotResponse = false;
     const requestTimeout = setTimeout(() => {
@@ -607,22 +635,27 @@ export function startRecording(root: HTMLElement): void {
         }
     }, 10_000);
 
-    const viewRoutesBtn = root.querySelector<HTMLButtonElement>('#btn-view-routes');
-    if (viewRoutesBtn) {
-        viewRoutesBtn.addEventListener('click', () => {
-            mountSavedRoutesView(root, () => {
-                mountAppShell(root);
-                startRecording(root);
-            });
-        });
-    }
-
     const gps = createGeolocationService();
     let breadcrumbCount = 0;
     let totalMeters = 0;
     let lastBreadcrumb: Breadcrumb | null = null;
     let startTime: number | null = null;
     let timerInterval: ReturnType<typeof setInterval> | null = null;
+
+    const viewRoutesBtn = root.querySelector<HTMLButtonElement>('#btn-view-routes');
+    if (viewRoutesBtn) {
+        viewRoutesBtn.addEventListener('click', () => {
+            gps.stop();
+            if (timerInterval !== null) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            mountSavedRoutesView(root, () => {
+                mountAppShell(root);
+                startRecording(root);
+            });
+        });
+    }
 
     gps.start(
         async (breadcrumb: Breadcrumb) => {

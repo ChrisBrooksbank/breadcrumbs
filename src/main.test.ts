@@ -350,12 +350,20 @@ describe('formatElapsed', () => {
         expect(formatElapsed(90)).toBe('1:30');
     });
 
-    it('formats 3600 seconds as 60:00', () => {
-        expect(formatElapsed(3600)).toBe('60:00');
+    it('formats 3600 seconds as 1:00:00', () => {
+        expect(formatElapsed(3600)).toBe('1:00:00');
     });
 
     it('formats 125 seconds as 2:05', () => {
         expect(formatElapsed(125)).toBe('2:05');
+    });
+
+    it('formats 3661 seconds as 1:01:01', () => {
+        expect(formatElapsed(3661)).toBe('1:01:01');
+    });
+
+    it('formats 7200 seconds as 2:00:00', () => {
+        expect(formatElapsed(7200)).toBe('2:00:00');
     });
 });
 
