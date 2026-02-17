@@ -301,8 +301,12 @@ export function createFeedbackService(): FeedbackService {
         },
         set silentMode(value: boolean) {
             _silentMode = value;
-            if (typeof localStorage !== 'undefined') {
-                localStorage.setItem(SILENT_MODE_KEY, String(value));
+            try {
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem(SILENT_MODE_KEY, String(value));
+                }
+            } catch {
+                // QuotaExceededError — silent mode still works in memory
             }
         },
         get lastSpeechTime() {

@@ -311,6 +311,8 @@ export function switchToNavigationView(
 
                     if (nav.progress.arrived) {
                         showNavArrived(root);
+                        navGps.stop();
+                        compass.stop();
                         return;
                     }
 
@@ -328,6 +330,8 @@ export function switchToNavigationView(
                         feedback.resetDistanceAnnouncements();
                         if (nav.progress.arrived) {
                             showNavArrived(root);
+                            navGps.stop();
+                            compass.stop();
                         } else {
                             const p = nav.progress;
                             updateNavProgress(root, p.currentIndex + 1, p.total);
@@ -340,7 +344,8 @@ export function switchToNavigationView(
                     refreshArrow();
                 },
                 () => {
-                    // GPS error during navigation — keep existing display, don't crash
+                    const progressText = root.querySelector('#nav-progress-text');
+                    if (progressText) progressText.textContent = 'GPS signal lost, trying\u2026';
                 }
             );
         })
@@ -419,6 +424,10 @@ export function openSaveModal(
                 input.focus();
                 return;
             }
+            // Clear any stale error message from a previous attempt
+            const existingError = backdrop.querySelector('.modal-error');
+            if (existingError) existingError.remove();
+
             const route = {
                 id: `route-${Date.now()}`,
                 name,
@@ -428,13 +437,14 @@ export function openSaveModal(
                 breadcrumbs,
             };
             saveRoute(route)
-                .then(() => {
+                .then(async () => {
                     closeModal();
+                    await clearSession();
                     onSaved?.();
                 })
                 .catch(() => {
                     const modal = backdrop.querySelector('.modal');
-                    if (modal && !modal.querySelector('.modal-error')) {
+                    if (modal) {
                         const errorMsg = document.createElement('p');
                         errorMsg.className = 'modal-error';
                         errorMsg.style.color = '#dc2626';
@@ -599,7 +609,14 @@ function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: (
                     renderRoutesList(root, onBack);
                 })
                 .catch(() => {
-                    closeDialog();
+                    const modal = backdrop.querySelector('.modal');
+                    if (modal && !modal.querySelector('.modal-error')) {
+                        const errorMsg = document.createElement('p');
+                        errorMsg.className = 'modal-error';
+                        errorMsg.style.color = '#dc2626';
+                        errorMsg.textContent = 'Could not delete route. Please try again.';
+                        modal.appendChild(errorMsg);
+                    }
                 });
         });
     }
@@ -621,8 +638,6 @@ export function startRecording(root: HTMLElement): void {
         );
         return;
     }
-
-    clearSession();
 
     setStatusRequesting(root);
     let gotResponse = false;
@@ -663,7 +678,11 @@ export function startRecording(root: HTMLElement): void {
                 gotResponse = true;
                 clearTimeout(requestTimeout);
             }
-            await appendBreadcrumb(breadcrumb);
+            try {
+                await appendBreadcrumb(breadcrumb);
+            } catch (e) {
+                console.error('Failed to persist breadcrumb:', e);
+            }
             breadcrumbCount++;
 
             if (lastBreadcrumb !== null) {
@@ -736,5 +755,5 @@ export function startRecording(root: HTMLElement): void {
 const appRoot = document.getElementById('app');
 if (appRoot) {
     mountAppShell(appRoot);
-    startRecording(appRoot);
+    clearSession().then(() => startRecording(appRoot));
 }
