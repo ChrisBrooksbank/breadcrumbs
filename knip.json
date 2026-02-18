@@ -1,5 +1,12 @@
 {
     "entry": ["src/main.ts", "src/types.ts"],
     "project": ["src/**/*.ts"],
-    "ignore": ["**/*.test.ts", "**/*.spec.ts", "src/gps.ts", "src/navigation.ts", "src/feedback.ts"]
+    "ignore": [
+        "**/*.test.ts",
+        "**/*.spec.ts",
+        "**/*.d.ts",
+        "src/gps.ts",
+        "src/navigation.ts",
+        "src/feedback.ts"
+    ]
 }

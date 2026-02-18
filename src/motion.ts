@@ -1,3 +1,66 @@
+/** Acceleration threshold (m/s²) to detect a shake gesture. */
+const SHAKE_THRESHOLD = 15;
+
+/** Minimum ms between shake callbacks to avoid rapid re-triggering. */
+const SHAKE_COOLDOWN_MS = 2000;
+
+interface ShakeDetector {
+    readonly available: boolean;
+    start(): void;
+    stop(): void;
+    onShake: (() => void) | null;
+}
+
+export function createShakeDetector(): ShakeDetector {
+    const available = typeof window !== 'undefined' && 'DeviceMotionEvent' in window;
+    let listening = false;
+    let onShake: (() => void) | null = null;
+    let lastShakeTime = 0;
+
+    function handleMotion(event: DeviceMotionEvent): void {
+        const acc = event.accelerationIncludingGravity;
+        if (!acc || acc.x == null || acc.y == null || acc.z == null) return;
+
+        const mag = Math.sqrt(acc.x ** 2 + acc.y ** 2 + acc.z ** 2);
+        // Subtract gravity (~9.81) to get net acceleration
+        const net = Math.abs(mag - 9.81);
+
+        if (net > SHAKE_THRESHOLD) {
+            const now = Date.now();
+            if (now - lastShakeTime > SHAKE_COOLDOWN_MS) {
+                lastShakeTime = now;
+                onShake?.();
+            }
+        }
+    }
+
+    function start(): void {
+        if (listening || !available) return;
+        listening = true;
+        window.addEventListener('devicemotion', handleMotion);
+    }
+
+    function stop(): void {
+        if (!listening) return;
+        listening = false;
+        window.removeEventListener('devicemotion', handleMotion);
+    }
+
+    return {
+        get available() {
+            return available;
+        },
+        start,
+        stop,
+        get onShake() {
+            return onShake;
+        },
+        set onShake(cb: (() => void) | null) {
+            onShake = cb;
+        },
+    };
+}
+
 /** Acceleration magnitude below this (m/s²) is considered motionless. */
 const MOTIONLESS_THRESHOLD = 0.5;
 

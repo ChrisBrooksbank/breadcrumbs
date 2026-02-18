@@ -8,7 +8,7 @@ export default defineConfig({
         VitePWA({
             registerType: 'autoUpdate',
             workbox: {
-                cacheId: 'breadcrumbs-v2',
+                cacheId: 'breadcrumbs-v3',
                 globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
             },
             manifest: {
@@ -29,6 +29,12 @@ export default defineConfig({
                         src: '/icons/icon-512.png',
                         sizes: '512x512',
                         type: 'image/png',
+                    },
+                    {
+                        src: '/icons/icon-512.png',
+                        sizes: '512x512',
+                        type: 'image/png',
+                        purpose: 'maskable',
                     },
                 ],
             },

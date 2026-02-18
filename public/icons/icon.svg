@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1d4ed8"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Breadcrumb trail: 6 white dots in gentle S-curve, smallest=origin (top), largest=current (bottom) -->
+  <!-- Origin dot (smallest) -->
+  <circle cx="230" cy="100" r="20" fill="white" opacity="0.7"/>
+  <!-- Return chevron near origin -->
+  <polyline points="195,95 210,80 225,95" fill="none" stroke="white" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
+  <!-- Trail dots graduating larger -->
+  <circle cx="290" cy="170" r="23" fill="white" opacity="0.75"/>
+  <circle cx="220" cy="245" r="26" fill="white" opacity="0.8"/>
+  <circle cx="300" cy="310" r="30" fill="white" opacity="0.85"/>
+  <circle cx="240" cy="380" r="34" fill="white" opacity="0.9"/>
+  <!-- Current position (largest dot) -->
+  <circle cx="280" cy="430" r="38" fill="white"/>
+</svg>

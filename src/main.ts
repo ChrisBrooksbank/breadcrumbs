@@ -13,6 +13,9 @@ import {
 } from '@/storage';
 import { haversineMeters, bearingDegrees } from '@/geo';
 import { createNavigationService, createCompassService } from '@/navigation';
+import { createWakeLockManager } from '@/wake-lock';
+import { createAudioKeepAlive } from '@/audio-keepalive';
+import { createShakeDetector } from '@/motion';
 import { createFeedbackService } from '@/feedback';
 import {
     initSettings,
@@ -21,15 +24,19 @@ import {
     decreaseFontSize,
     getThemeMode,
     setThemeMode,
+    getSimpleMode,
+    toggleSimpleMode,
     FONT_SIZES,
 } from '@/settings';
 import type { ThemeMode } from '@/settings';
+import { classifyDirection } from '@/feedback';
 import { LANDMARK_PRESETS } from '@/landmarks';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
 function renderA11yControls(): string {
     const size = getFontSize();
     const mode = getThemeMode();
+    const simple = getSimpleMode();
     const minDisabled = size === FONT_SIZES[0] ? 'disabled' : '';
     const maxDisabled = size === FONT_SIZES[FONT_SIZES.length - 1] ? 'disabled' : '';
 
@@ -49,6 +56,9 @@ function renderA11yControls(): string {
                 <button class="a11y-controls__btn" id="btn-theme-light" aria-label="Light theme" ${pressed('light')}>Day</button>
                 <button class="a11y-controls__btn" id="btn-theme-dark" aria-label="Dark theme" ${pressed('dark')}>Night</button>
                 <button class="a11y-controls__btn" id="btn-theme-system" aria-label="System theme" ${pressed('system')}>Auto</button>
+            </div>
+            <div class="a11y-controls__group">
+                <button class="a11y-controls__btn" id="btn-simple-mode" aria-label="Toggle simple mode" aria-pressed="${simple}">${simple ? 'Simple: On' : 'Simple: Off'}</button>
             </div>
         </div>
     `;
@@ -94,10 +104,25 @@ function wireA11yControls(root: HTMLElement): void {
             refreshThemeButtons();
         });
     }
+
+    const simpleBtn = root.querySelector<HTMLButtonElement>('#btn-simple-mode');
+    if (simpleBtn) {
+        simpleBtn.addEventListener('click', () => {
+            const isOn = toggleSimpleMode();
+            simpleBtn.setAttribute('aria-pressed', String(isOn));
+            simpleBtn.textContent = isOn ? 'Simple: On' : 'Simple: Off';
+        });
+    }
 }
 
 export function mountAppShell(root: HTMLElement): void {
-    root.innerHTML = `
+    const simple = getSimpleMode();
+    root.innerHTML = simple ? renderSimpleRecordingView() : renderFullRecordingView();
+    wireA11yControls(root);
+}
+
+function renderFullRecordingView(): string {
+    return `
         <header>
             <h1>Breadcrumbs</h1>
         </header>
@@ -161,7 +186,47 @@ export function mountAppShell(root: HTMLElement): void {
         </main>
         <footer>Breadcrumbs &mdash; map-free navigation</footer>
     `;
-    wireA11yControls(root);
+}
+
+function renderSimpleRecordingView(): string {
+    return `
+        <div class="simple-status-bar simple-status-bar--idle" id="simple-status-bar" aria-live="polite"></div>
+        ${renderA11yControls()}
+        <main class="simple-recording-main">
+            <div class="simple-stats" id="recording-stats" aria-live="polite">
+                <span class="simple-stats__time" id="elapsed-time">0:00</span>
+                <span class="simple-stats__distance" id="distance-walked">0 m</span>
+            </div>
+            <div id="status-indicator">
+                <span class="status-badge status-badge--idle" id="status-badge" aria-live="polite" hidden>
+                    <span id="status-text">Idle</span>
+                </span>
+            </div>
+            <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
+                Stationary
+            </div>
+            <button
+                class="simple-take-me-back"
+                id="btn-take-me-back"
+                aria-label="Take me back to my starting point"
+                disabled
+            >
+                TAKE ME BACK
+            </button>
+            <button
+                class="simple-more-btn"
+                id="btn-simple-more"
+                aria-label="More options"
+            >
+                More&hellip;
+            </button>
+            <div class="simple-more-panel" id="simple-more-panel" hidden>
+                <button class="btn btn--secondary" id="btn-save-route" aria-label="Save this route for later" disabled>Save this route</button>
+                <button class="btn btn--landmark" id="btn-mark-landmark" aria-label="Mark this spot as a landmark" disabled>Mark landmark</button>
+                <button class="btn btn--secondary" id="btn-view-routes" aria-label="View saved routes">Saved routes</button>
+            </div>
+        </main>
+    `;
 }
 
 function setStatusRecording(root: HTMLElement): void {
@@ -181,6 +246,12 @@ function setStatusRecording(root: HTMLElement): void {
     }
     if (stats) {
         stats.hidden = false;
+    }
+    // Simple mode status bar
+    const simpleBar = root.querySelector<HTMLElement>('#simple-status-bar');
+    if (simpleBar) {
+        simpleBar.classList.remove('simple-status-bar--idle', 'simple-status-bar--error');
+        simpleBar.classList.add('simple-status-bar--recording');
     }
 }
 
@@ -260,6 +331,12 @@ function setStatusError(root: HTMLElement, message: string): void {
     if (statusText) {
         statusText.textContent = message;
     }
+    // Simple mode status bar
+    const simpleBar = root.querySelector<HTMLElement>('#simple-status-bar');
+    if (simpleBar) {
+        simpleBar.classList.remove('simple-status-bar--idle', 'simple-status-bar--recording');
+        simpleBar.classList.add('simple-status-bar--error');
+    }
 }
 
 function enableActionButtons(root: HTMLElement): void {
@@ -272,7 +349,13 @@ function enableActionButtons(root: HTMLElement): void {
 }
 
 export function mountNavigationView(root: HTMLElement): void {
-    root.innerHTML = `
+    const simple = getSimpleMode();
+    root.innerHTML = simple ? renderSimpleNavigationView() : renderFullNavigationView();
+    wireA11yControls(root);
+}
+
+function renderFullNavigationView(): string {
+    return `
         <header>
             <h1>Breadcrumbs</h1>
         </header>
@@ -310,12 +393,38 @@ export function mountNavigationView(root: HTMLElement): void {
             <button class="btn btn--secondary" id="btn-stop-navigation" aria-label="Stop navigation and return to recording screen">
                 Stop navigation
             </button>
+            <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
+                Pocket mode
+            </button>
             <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode (tones and vibration only, no speech)" aria-pressed="false">
                 Silent mode: Off
             </button>
         </footer>
     `;
-    wireA11yControls(root);
+}
+
+function renderSimpleNavigationView(): string {
+    return `
+        ${renderA11yControls()}
+        <main class="simple-nav" id="simple-nav" aria-live="polite">
+            <div class="simple-nav__direction" id="simple-direction">STRAIGHT</div>
+            <div class="simple-nav__distance" id="nav-distance-value">--</div>
+            <div class="simple-nav__progress" id="nav-progress" aria-live="polite">
+                <span id="nav-progress-text">Loading&hellip;</span>
+            </div>
+        </main>
+        <footer>
+            <button class="btn btn--secondary" id="btn-stop-navigation" aria-label="Stop navigation and return to recording screen">
+                Stop
+            </button>
+            <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
+                Pocket mode
+            </button>
+            <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode" aria-pressed="false">
+                Silent mode: Off
+            </button>
+        </footer>
+    `;
 }
 
 function updateNavArrow(root: HTMLElement, arrowDeg: number): void {
@@ -335,6 +444,45 @@ function updateNavProgress(root: HTMLElement, current: number, total: number): v
     if (el) el.textContent = `Breadcrumb ${current} of ${total}`;
 }
 
+/** Map classifyDirection output to a simple display word. */
+function directionWord(bearingDelta: number): string {
+    const dir = classifyDirection(bearingDelta);
+    switch (dir) {
+        case 'straight ahead':
+            return 'STRAIGHT';
+        case 'turn right':
+            return 'TURN RIGHT';
+        case 'turn left':
+            return 'TURN LEFT';
+        default:
+            return 'BEHIND YOU';
+    }
+}
+
+/** Map classifyDirection output to a simple nav CSS modifier. */
+function directionClass(bearingDelta: number): string {
+    const dir = classifyDirection(bearingDelta);
+    switch (dir) {
+        case 'straight ahead':
+            return 'simple-nav--on-track';
+        case 'turn right':
+        case 'turn left':
+            return 'simple-nav--turn';
+        default:
+            return 'simple-nav--wrong';
+    }
+}
+
+function updateSimpleDirection(root: HTMLElement, bearingDelta: number): void {
+    const dirEl = root.querySelector<HTMLElement>('#simple-direction');
+    const navEl = root.querySelector<HTMLElement>('#simple-nav');
+    if (dirEl) dirEl.textContent = directionWord(bearingDelta);
+    if (navEl) {
+        navEl.classList.remove('simple-nav--on-track', 'simple-nav--turn', 'simple-nav--wrong');
+        navEl.classList.add(directionClass(bearingDelta));
+    }
+}
+
 function showNavArrived(root: HTMLElement): void {
     const el = root.querySelector('#nav-progress-text');
     if (el) el.textContent = "You've arrived!";
@@ -342,6 +490,14 @@ function showNavArrived(root: HTMLElement): void {
     if (distanceEl) distanceEl.textContent = '0 m';
     const arrow = root.querySelector<SVGElement>('#nav-compass-arrow');
     if (arrow) arrow.style.opacity = '0.3';
+    // Simple mode: show arrived state
+    const dirEl = root.querySelector<HTMLElement>('#simple-direction');
+    if (dirEl) dirEl.textContent = 'ARRIVED!';
+    const navEl = root.querySelector<HTMLElement>('#simple-nav');
+    if (navEl) {
+        navEl.classList.remove('simple-nav--turn', 'simple-nav--wrong');
+        navEl.classList.add('simple-nav--on-track');
+    }
 }
 
 /**
@@ -453,6 +609,51 @@ export function switchToNavigationView(
         });
     }
 
+    // Pocket mode: wake lock, audio keepalive, shake detector
+    const wakeLock = createWakeLockManager();
+    const audioKeepAlive = createAudioKeepAlive();
+    const shakeDetector = createShakeDetector();
+    let pocketMode = false;
+
+    // Acquire wake lock by default (keep screen on)
+    wakeLock.acquire().catch(() => {});
+
+    function enterPocketMode(): void {
+        pocketMode = true;
+        wakeLock.release().catch(() => {});
+        audioKeepAlive.start();
+        shakeDetector.start();
+        feedback.announce('Pocket mode on. Shake to wake.');
+        const pocketBtn = root.querySelector<HTMLButtonElement>('#btn-pocket-mode');
+        if (pocketBtn) pocketBtn.textContent = 'Exit pocket mode';
+    }
+
+    function exitPocketMode(): void {
+        pocketMode = false;
+        audioKeepAlive.stop();
+        shakeDetector.stop();
+        wakeLock.acquire().catch(() => {});
+        feedback.announce('Screen on.');
+        const pocketBtn = root.querySelector<HTMLButtonElement>('#btn-pocket-mode');
+        if (pocketBtn) pocketBtn.textContent = 'Pocket mode';
+    }
+
+    shakeDetector.onShake = () => {
+        if (pocketMode) exitPocketMode();
+    };
+
+    const pocketBtn = root.querySelector<HTMLButtonElement>('#btn-pocket-mode');
+    if (pocketBtn) {
+        pocketBtn.hidden = false;
+        pocketBtn.addEventListener('click', () => {
+            if (pocketMode) {
+                exitPocketMode();
+            } else {
+                enterPocketMode();
+            }
+        });
+    }
+
     let currentPos: Breadcrumb | null = null;
     let bearingToBreadcrumb: number | null = null;
     let trailBreadcrumbs: Breadcrumb[] = [];
@@ -495,8 +696,12 @@ export function switchToNavigationView(
         refreshCalibrationHint();
         renderTrail();
         if (bearingToBreadcrumb !== null && compass.compassHeading !== null) {
-            const bearingDelta = bearingToBreadcrumb - compass.compassHeading;
-            feedback.vibrateAlignment(bearingDelta);
+            const delta = bearingToBreadcrumb - compass.compassHeading;
+            feedback.vibrateAlignment(delta);
+            // Update simple mode direction display
+            if (getSimpleMode()) {
+                updateSimpleDirection(root, delta);
+            }
         }
     };
 
@@ -565,6 +770,7 @@ export function switchToNavigationView(
                         feedback.playArrivalFeedback();
                         navGps.stop();
                         compass.stop();
+                        if (pocketMode) exitPocketMode();
                         return;
                     }
 
@@ -574,6 +780,11 @@ export function switchToNavigationView(
                         updateNavDistance(root, dist);
                         feedback.announceDistance(dist);
                         feedback.vibrateProximity(dist);
+
+                        // Smart GPS: low accuracy when far, high when close
+                        if (pocketMode) {
+                            navGps.setHighAccuracy(dist <= 100);
+                        }
 
                         // Landmark announcements
                         if (target.label) {
@@ -604,6 +815,7 @@ export function switchToNavigationView(
                             feedback.playArrivalFeedback();
                             navGps.stop();
                             compass.stop();
+                            if (pocketMode) exitPocketMode();
                         } else {
                             const p = nav.progress;
                             updateNavProgress(root, p.currentIndex + 1, p.total);
@@ -645,12 +857,20 @@ export function switchToNavigationView(
             if (progressText) progressText.textContent = 'Could not load route.';
         });
 
+    function cleanupPocketMode(): void {
+        audioKeepAlive.stop();
+        shakeDetector.stop();
+        shakeDetector.onShake = null;
+        wakeLock.destroy();
+    }
+
     const stopBtn = root.querySelector<HTMLButtonElement>('#btn-stop-navigation');
     if (stopBtn) {
         stopBtn.addEventListener('click', () => {
             feedback.cancelPending();
             compass.stop();
             navGps.stop();
+            cleanupPocketMode();
             mountAppShell(root);
             startRecording(root);
         });
@@ -1096,6 +1316,17 @@ export function startRecording(root: HTMLElement): void {
     let lastBreadcrumb: Breadcrumb | null = null;
     let startTime: number | null = null;
     let timerInterval: ReturnType<typeof setInterval> | null = null;
+
+    // Wire simple mode "More..." toggle
+    const moreBtn = root.querySelector<HTMLButtonElement>('#btn-simple-more');
+    const morePanel = root.querySelector<HTMLElement>('#simple-more-panel');
+    if (moreBtn && morePanel) {
+        moreBtn.addEventListener('click', () => {
+            const hidden = morePanel.hidden;
+            morePanel.hidden = !hidden;
+            moreBtn.textContent = hidden ? 'Less' : 'More\u2026';
+        });
+    }
 
     const viewRoutesBtn = root.querySelector<HTMLButtonElement>('#btn-view-routes');
     if (viewRoutesBtn) {

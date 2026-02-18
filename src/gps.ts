@@ -72,6 +72,8 @@ export interface GeolocationService {
     readonly isSuspended: boolean;
     /** Called when suspension state changes. */
     onSuspendedChange: ((suspended: boolean) => void) | null;
+    /** Switch enableHighAccuracy on the fly (restarts the GPS watcher). */
+    setHighAccuracy(value: boolean): void;
 }
 
 interface TimestampedFix {
@@ -263,9 +265,17 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
         suspended = false;
     }
 
+    function setHighAccuracy(value: boolean): void {
+        if (watchId === null || !savedOnBreadcrumb) return;
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        startWatcher(savedOnBreadcrumb, savedOnError, { enableHighAccuracy: value });
+    }
+
     return {
         start,
         stop,
+        setHighAccuracy,
         get movementBearing() {
             return currentMovementBearing;
         },
