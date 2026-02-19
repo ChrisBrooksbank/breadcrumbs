@@ -953,7 +953,9 @@ export function switchToNavigationView(
                 },
                 () => {
                     const progressText = root.querySelector('#nav-progress-text');
-                    if (progressText) progressText.textContent = 'GPS signal lost, trying\u2026';
+                    if (progressText)
+                        progressText.textContent =
+                            'Lost your location \u2014 stay still, trying to reconnect\u2026';
                 }
             );
         })
@@ -973,8 +975,8 @@ export function switchToNavigationView(
     if (stopBtn) {
         stopBtn.addEventListener('click', () => {
             openConfirmDialog(
-                'Stop navigation?',
-                'You will stop receiving directions. A new recording will start.',
+                'Stop directions?',
+                'You will stop getting directions. Your route is still saved \u2014 you can follow it again from Saved Routes.',
                 'Stop',
                 () => {
                     feedback.cancelPending();
@@ -983,7 +985,8 @@ export function switchToNavigationView(
                     cleanupPocketMode();
                     mountAppShell(root);
                     startRecording(root);
-                }
+                },
+                { delay: 1500 }
             );
         });
     }
@@ -1325,10 +1328,13 @@ export function openConfirmDialog(
     title: string,
     message: string,
     confirmLabel: string,
-    onConfirm: () => void
+    onConfirm: () => void,
+    options?: { delay?: number }
 ): void {
     if (modalOpen) return;
     modalOpen = true;
+
+    const delayMs = options?.delay ?? 0;
 
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
@@ -1341,7 +1347,7 @@ export function openConfirmDialog(
             <h2 id="confirm-modal-title">${escapeHtml(title)}</h2>
             <p class="confirm-dialog-text">${escapeHtml(message)}</p>
             <div class="modal-actions">
-                <button class="btn btn--primary" id="btn-confirm-yes" aria-label="${escapeHtml(confirmLabel)}">${escapeHtml(confirmLabel)}</button>
+                <button class="btn btn--primary${delayMs > 0 ? ' btn--delayed' : ''}" id="btn-confirm-yes" aria-label="${escapeHtml(confirmLabel)}"${delayMs > 0 ? ' disabled' : ''}>${delayMs > 0 ? 'Wait\u2026' : escapeHtml(confirmLabel)}</button>
                 <button class="btn btn--secondary" id="btn-confirm-cancel" aria-label="Cancel">Cancel</button>
             </div>
         </div>
@@ -1349,12 +1355,25 @@ export function openConfirmDialog(
 
     document.body.appendChild(backdrop);
 
+    const confirmBtn = backdrop.querySelector<HTMLButtonElement>('#btn-confirm-yes');
+
+    // If delay is set, enable the confirm button after the delay
+    let delayTimer: ReturnType<typeof setTimeout> | null = null;
+    if (delayMs > 0 && confirmBtn) {
+        delayTimer = setTimeout(() => {
+            confirmBtn.disabled = false;
+            confirmBtn.classList.remove('btn--delayed');
+            confirmBtn.textContent = confirmLabel;
+        }, delayMs);
+    }
+
     function handleKeydown(e: KeyboardEvent): void {
         if (e.key === 'Escape') closeDialog();
     }
 
     function closeDialog(): void {
         modalOpen = false;
+        if (delayTimer) clearTimeout(delayTimer);
         document.removeEventListener('keydown', handleKeydown);
         backdrop.remove();
     }
@@ -1368,7 +1387,6 @@ export function openConfirmDialog(
         if (e.target === backdrop) closeDialog();
     });
 
-    const confirmBtn = backdrop.querySelector<HTMLButtonElement>('#btn-confirm-yes');
     if (confirmBtn) {
         confirmBtn.addEventListener('click', () => {
             closeDialog();
@@ -1449,25 +1467,28 @@ function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: (
 /** Screen lock overlay to prevent accidental pocket presses during recording. */
 function createScreenLock(root: HTMLElement): { destroy: () => void } {
     const LOCK_DELAY_MS = 15_000;
+    const HOLD_DURATION_MS = 1000;
     let lockTimer: ReturnType<typeof setTimeout> | null = null;
     let overlay: HTMLElement | null = null;
-    let tapCount = 0;
-    let tapTimer: ReturnType<typeof setTimeout> | null = null;
+    let holdTimer: ReturnType<typeof setTimeout> | null = null;
 
     function showLock(): void {
         if (overlay) return;
         overlay = document.createElement('div');
         overlay.className = 'screen-lock-overlay';
         overlay.setAttribute('role', 'alertdialog');
-        overlay.setAttribute('aria-label', 'Screen locked. Double tap to unlock.');
+        overlay.setAttribute('aria-label', 'Screen locked. Press and hold to unlock.');
         overlay.innerHTML = `
             <div class="screen-lock__content">
                 <div class="screen-lock__icon" aria-hidden="true">&#128274;</div>
                 <div class="screen-lock__text">Screen locked</div>
-                <div class="screen-lock__hint">Double-tap to unlock</div>
+                <div class="screen-lock__hint">Press and hold to unlock</div>
             </div>
+            <div class="screen-lock__progress-bar"></div>
         `;
-        overlay.addEventListener('click', handleOverlayTap);
+        overlay.addEventListener('pointerdown', handleHoldStart);
+        overlay.addEventListener('pointerup', handleHoldEnd);
+        overlay.addEventListener('pointercancel', handleHoldEnd);
         // Prevent any touch events from reaching buttons underneath
         overlay.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
         root.appendChild(overlay);
@@ -1475,28 +1496,42 @@ function createScreenLock(root: HTMLElement): { destroy: () => void } {
 
     function hideLock(): void {
         if (overlay) {
-            overlay.removeEventListener('click', handleOverlayTap);
+            overlay.removeEventListener('pointerdown', handleHoldStart);
+            overlay.removeEventListener('pointerup', handleHoldEnd);
+            overlay.removeEventListener('pointercancel', handleHoldEnd);
             overlay.remove();
             overlay = null;
         }
-        tapCount = 0;
-        if (tapTimer) {
-            clearTimeout(tapTimer);
-            tapTimer = null;
-        }
+        cancelHold();
         resetTimer();
     }
 
-    function handleOverlayTap(): void {
-        tapCount++;
-        if (tapCount >= 2) {
+    function handleHoldStart(): void {
+        if (!overlay) return;
+        const bar = overlay.querySelector<HTMLElement>('.screen-lock__progress-bar');
+        const hint = overlay.querySelector<HTMLElement>('.screen-lock__hint');
+        if (bar) bar.classList.add('screen-lock__progress-bar--active');
+        if (hint) hint.textContent = 'Hold to unlock\u2026';
+        holdTimer = setTimeout(() => {
             hideLock();
-            return;
+        }, HOLD_DURATION_MS);
+    }
+
+    function handleHoldEnd(): void {
+        cancelHold();
+    }
+
+    function cancelHold(): void {
+        if (holdTimer) {
+            clearTimeout(holdTimer);
+            holdTimer = null;
         }
-        if (tapTimer) clearTimeout(tapTimer);
-        tapTimer = setTimeout(() => {
-            tapCount = 0;
-        }, 400);
+        if (overlay) {
+            const bar = overlay.querySelector<HTMLElement>('.screen-lock__progress-bar');
+            const hint = overlay.querySelector<HTMLElement>('.screen-lock__hint');
+            if (bar) bar.classList.remove('screen-lock__progress-bar--active');
+            if (hint) hint.textContent = 'Press and hold to unlock';
+        }
     }
 
     function resetTimer(): void {
@@ -1516,7 +1551,7 @@ function createScreenLock(root: HTMLElement): { destroy: () => void } {
 
     function destroy(): void {
         if (lockTimer) clearTimeout(lockTimer);
-        if (tapTimer) clearTimeout(tapTimer);
+        if (holdTimer) clearTimeout(holdTimer);
         if (overlay) {
             overlay.remove();
             overlay = null;
@@ -1652,13 +1687,14 @@ export function startRecording(root: HTMLElement): void {
                 if (takeBackBtn) {
                     takeBackBtn.addEventListener('click', () => {
                         openConfirmDialog(
-                            'End walk?',
-                            'This will stop recording and navigate you back to your starting point.',
+                            'Go back now?',
+                            'This will stop your walk and guide you back to where you started.',
                             'Take me back',
                             () => {
                                 cleanupRecording();
                                 switchToNavigationView(root);
-                            }
+                            },
+                            { delay: 1500 }
                         );
                     });
                 }
@@ -1703,11 +1739,14 @@ export function startRecording(root: HTMLElement): void {
             }
             let message: string;
             if (error.code === error.PERMISSION_DENIED) {
-                message = 'Location access denied. Please allow location to record your route.';
+                message =
+                    'Location is turned off. Open your phone\u2019s Settings, find Location, and make sure it\u2019s turned on for this app.';
             } else if (error.code === error.POSITION_UNAVAILABLE) {
-                message = 'Location unavailable. Please check your GPS signal.';
+                message =
+                    'Can\u2019t find your location. Try going outside or moving away from buildings.';
             } else {
-                message = 'Location error. Please try again.';
+                message =
+                    'Taking too long to find you. Try going outside, then tap the button again.';
             }
             setStatusError(root, message);
         }
@@ -1719,4 +1758,14 @@ if (appRoot) {
     initSettings();
     mountAppShell(appRoot);
     clearSession().then(() => startRecording(appRoot));
+
+    // Delegated button tap feedback for elderly users —
+    // provides haptic + audio confirmation that a tap registered
+    const tapFeedback = createFeedbackService();
+    appRoot.addEventListener('click', (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        if (target.closest('.btn, .a11y-controls__btn, .simple-take-me-back')) {
+            tapFeedback.playButtonTap();
+        }
+    });
 }

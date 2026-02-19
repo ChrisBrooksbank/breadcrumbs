@@ -5,7 +5,7 @@
  * for resilience (same pattern as feedback.ts).
  */
 
-export const FONT_SIZES = [14, 16, 18, 20, 22] as const;
+export const FONT_SIZES = [14, 16, 18, 20, 22, 24, 26, 28] as const;
 type FontSize = (typeof FONT_SIZES)[number];
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -125,9 +125,14 @@ export function setThemeMode(mode: ThemeMode): void {
 }
 
 export function initSettings(): void {
+    const rawStored = localStorage.getItem(FONT_SIZE_KEY);
     const storedSize = readStorage<unknown>(FONT_SIZE_KEY, DEFAULT_FONT_SIZE);
     currentFontSize = isValidFontSize(storedSize) ? storedSize : DEFAULT_FONT_SIZE;
-    applyFontSize(currentFontSize);
+    // Only apply font size if user has explicitly set one — otherwise
+    // respect the browser/system default font scaling for accessibility.
+    if (rawStored !== null) {
+        applyFontSize(currentFontSize);
+    }
 
     const storedTheme = readStorage<unknown>(THEME_MODE_KEY, DEFAULT_THEME_MODE);
     currentThemeMode = isValidThemeMode(storedTheme) ? storedTheme : DEFAULT_THEME_MODE;

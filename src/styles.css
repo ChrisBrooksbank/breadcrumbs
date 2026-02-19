@@ -4,7 +4,7 @@
     --color-bg: #f5f5f5;
     --color-text: #1f2937;
     --color-text-heading: #111827;
-    --color-text-muted: #4b5563;
+    --color-text-muted: #374151;
 
     --color-primary: #1d4ed8;
     --color-primary-hover: #1e40af;
@@ -775,8 +775,8 @@ footer .btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 48px;
-    min-height: 48px;
+    min-width: 56px;
+    min-height: 56px;
     padding: 0.25rem 0.5rem;
     border: 2px solid var(--color-border);
     border-radius: 8px;
@@ -947,6 +947,21 @@ footer .btn {
     color: rgba(255, 255, 255, 0.7);
 }
 
+.screen-lock__progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 8px;
+    width: 0;
+    background: white;
+    border-radius: 0 4px 4px 0;
+}
+
+.screen-lock__progress-bar--active {
+    width: 100%;
+    transition: width 1s linear;
+}
+
 /* ── Simple Mode ── */
 
 /* Status bar at top of simple recording screen */
@@ -961,11 +976,11 @@ footer .btn {
 }
 
 .simple-status-bar--recording {
-    background: #16a34a;
+    background: #15803d;
 }
 
 .simple-status-bar--error {
-    background: #dc2626;
+    background: #b91c1c;
 }
 
 /* Simple recording main layout */
@@ -1068,17 +1083,17 @@ footer .btn {
 }
 
 .simple-nav--on-track {
-    background: #16a34a;
+    background: #15803d;
     color: white;
 }
 
 .simple-nav--turn {
-    background: #d97706;
+    background: #92400e;
     color: white;
 }
 
 .simple-nav--wrong {
-    background: #dc2626;
+    background: #b91c1c;
     color: white;
 }
 
@@ -1121,4 +1136,53 @@ footer .btn {
 /* Hide full a11y controls in simple mode (except the simple toggle itself) */
 [data-simple-mode='true'] .a11y-controls__group:not(:last-child) {
     display: none;
+}
+
+/* ── Delayed confirm button (destructive dialog protection) ── */
+
+.btn--delayed {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* ── Reduced motion ── */
+
+@media (prefers-reduced-motion: reduce) {
+    .status-badge--recording .status-dot {
+        animation: none;
+    }
+
+    .screen-lock__progress-bar--active {
+        transition: none;
+        width: 100%;
+    }
+
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0s !important;
+        animation-duration: 0s !important;
+    }
+}
+
+/* ── High contrast ── */
+
+@media (prefers-contrast: more) {
+    :root {
+        --color-text-muted: #1f2937;
+        --color-border: #6b7280;
+    }
+
+    .a11y-controls__btn {
+        border-width: 3px;
+    }
+
+    .btn--secondary {
+        border-width: 3px;
+    }
+
+    .route-card__landmarks {
+        color: #6d28d9;
+        font-weight: 700;
+    }
 }

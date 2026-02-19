@@ -173,7 +173,7 @@ describe('startRecording', () => {
         watchErrorCallback?.(error);
 
         const statusText = root.querySelector('#status-text');
-        expect(statusText?.textContent).toContain('Location access denied');
+        expect(statusText?.textContent).toContain('Location is turned off');
     });
 
     it('shows unavailable error message on POSITION_UNAVAILABLE', () => {
@@ -190,10 +190,10 @@ describe('startRecording', () => {
         watchErrorCallback?.(error);
 
         const statusText = root.querySelector('#status-text');
-        expect(statusText?.textContent).toContain('Location unavailable');
+        expect(statusText?.textContent).toContain('find your location');
     });
 
-    it('shows generic error message on TIMEOUT', () => {
+    it('shows timeout error message on TIMEOUT', () => {
         startRecording(root);
 
         const error = {
@@ -207,7 +207,7 @@ describe('startRecording', () => {
         watchErrorCallback?.(error);
 
         const statusText = root.querySelector('#status-text');
-        expect(statusText?.textContent).toContain('Location error');
+        expect(statusText?.textContent).toContain('Taking too long');
     });
 
     it('adds error CSS class on geolocation error', () => {
@@ -525,9 +525,10 @@ describe('switchToNavigationView', () => {
     });
 
     it('stop navigation button returns to app shell', async () => {
+        vi.useFakeTimers();
         mountAppShell(root);
         switchToNavigationView(root);
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await vi.advanceTimersByTimeAsync(50);
 
         vi.stubGlobal('navigator', {
             geolocation: {
@@ -540,12 +541,16 @@ describe('switchToNavigationView', () => {
         const stopBtn = root.querySelector<HTMLButtonElement>('#btn-stop-navigation');
         stopBtn?.click();
 
-        // Confirm dialog should appear
+        // Confirm dialog should appear with delayed button
         const confirmBtn = document.querySelector<HTMLButtonElement>('#btn-confirm-yes');
         expect(confirmBtn).not.toBeNull();
+
+        // Advance past the 1.5s delay
+        await vi.advanceTimersByTimeAsync(1500);
         confirmBtn?.click();
 
         expect(root.querySelector('#btn-take-me-back')).not.toBeNull();
+        vi.useRealTimers();
         vi.unstubAllGlobals();
     });
 });
@@ -580,6 +585,7 @@ describe('"Take me back" button switches to navigation view', () => {
     });
 
     it('clicking "Take me back" after first breadcrumb shows confirmation then navigation view', async () => {
+        vi.useFakeTimers();
         startRecording(root);
 
         watchPositionCallback({
@@ -587,22 +593,29 @@ describe('"Take me back" button switches to navigation view', () => {
             timestamp: 1000,
         } as GeolocationPosition);
 
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await vi.advanceTimersByTimeAsync(50);
 
         const takeBackBtn = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
         expect(takeBackBtn?.disabled).toBe(false);
         takeBackBtn?.click();
 
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await vi.advanceTimersByTimeAsync(50);
 
-        // Confirm dialog should appear
+        // Confirm button should be disabled initially (1.5s delay)
         const confirmBtn = document.querySelector<HTMLButtonElement>('#btn-confirm-yes');
         expect(confirmBtn).not.toBeNull();
+        expect(confirmBtn?.disabled).toBe(true);
+
+        // Advance past the delay
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(confirmBtn?.disabled).toBe(false);
+
         confirmBtn?.click();
 
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await vi.advanceTimersByTimeAsync(50);
 
         expect(root.querySelector('#nav-compass-arrow')).not.toBeNull();
+        vi.useRealTimers();
     });
 });
 

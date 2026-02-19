@@ -170,6 +170,12 @@ export interface FeedbackService {
      */
     playBackOnTrackFeedback(): void;
     /**
+     * Play brief tap feedback (30ms vibrate + quiet tone) so elderly users
+     * know a button press registered, especially on bright outdoor screens.
+     * Respects silent mode: skips tone but keeps haptic.
+     */
+    playButtonTap(): void;
+    /**
      * Cancel any pending debounced direction announcement.
      * Call when stopping navigation to prevent stale speech firing.
      */
@@ -349,6 +355,13 @@ export function createFeedbackService(): FeedbackService {
         }
     }
 
+    function playButtonTap(): void {
+        vibrate(30);
+        if (!_silentMode) {
+            playTone(600, 0.05, 0.15);
+        }
+    }
+
     function cancelPending(): void {
         if (directionDebounceTimer !== null) {
             clearTimeout(directionDebounceTimer);
@@ -413,6 +426,7 @@ export function createFeedbackService(): FeedbackService {
         announce,
         announceDistance,
         resetDistanceAnnouncements,
+        playButtonTap,
         cancelPending,
         playConfirmationBeep,
         playProximityAlert,

@@ -33,9 +33,11 @@ describe('settings – font size', () => {
         initSettings();
     });
 
-    it('defaults to 16px font size', () => {
+    it('defaults to 16px font size in memory, does not apply to DOM (respects system scaling)', () => {
         expect(getFontSize()).toBe(16);
-        expect(document.documentElement.style.fontSize).toBe('16px');
+        // When no font size is saved, initSettings skips applyFontSize
+        // to respect browser/system default font scaling
+        expect(document.documentElement.style.fontSize).toBe('');
     });
 
     it('setFontSize persists and applies', () => {

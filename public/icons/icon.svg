@@ -1,22 +1,56 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#1d4ed8"/>
-      <stop offset="100%" stop-color="#1e40af"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="50%" stop-color="#1d4ed8"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
     </linearGradient>
+    <linearGradient id="trail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.3)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0.7)"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="white" stop-opacity="0.9"/>
+      <stop offset="50%" stop-color="white" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="pin-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
+    </radialGradient>
   </defs>
   <!-- Background -->
-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
-  <!-- Breadcrumb trail: 6 white dots in gentle S-curve, smallest=origin (top), largest=current (bottom) -->
-  <!-- Origin dot (smallest) -->
-  <circle cx="230" cy="100" r="20" fill="white" opacity="0.7"/>
-  <!-- Return chevron near origin -->
-  <polyline points="195,95 210,80 225,95" fill="none" stroke="white" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
-  <!-- Trail dots graduating larger -->
-  <circle cx="290" cy="170" r="23" fill="white" opacity="0.75"/>
-  <circle cx="220" cy="245" r="26" fill="white" opacity="0.8"/>
-  <circle cx="300" cy="310" r="30" fill="white" opacity="0.85"/>
-  <circle cx="240" cy="380" r="34" fill="white" opacity="0.9"/>
-  <!-- Current position (largest dot) -->
-  <circle cx="280" cy="430" r="38" fill="white"/>
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  <!-- Subtle grid texture -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="white" stroke-opacity="0.04" stroke-width="1"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="white" stroke-opacity="0.04" stroke-width="1"/>
+  <circle cx="256" cy="256" r="100" fill="none" stroke="white" stroke-opacity="0.04" stroke-width="1"/>
+  <!-- Trail path (S-curve) -->
+  <path d="M200,110 C320,140 160,220 300,260 C380,280 170,340 260,400"
+        fill="none" stroke="url(#trail)" stroke-width="6" stroke-linecap="round"
+        stroke-dasharray="2,14" opacity="0.5"/>
+  <path d="M200,110 C320,140 160,220 300,260 C380,280 170,340 260,400"
+        fill="none" stroke="white" stroke-width="3" stroke-linecap="round"
+        opacity="0.15"/>
+  <!-- Origin pin (home) -->
+  <circle cx="200" cy="110" r="28" fill="white" opacity="0.12"/>
+  <circle cx="200" cy="110" r="16" fill="white" opacity="0.35"/>
+  <!-- Home icon inside origin -->
+  <path d="M192,113 L200,105 L208,113 L208,118 L204,118 L204,114 L196,114 L196,118 L192,118 Z"
+        fill="white" opacity="0.8"/>
+  <!-- Trail breadcrumb dots (graduating size + opacity) -->
+  <circle cx="262" cy="168" r="8" fill="white" opacity="0.35"/>
+  <circle cx="232" cy="222" r="10" fill="white" opacity="0.45"/>
+  <circle cx="300" cy="262" r="12" fill="white" opacity="0.55"/>
+  <circle cx="245" cy="322" r="14" fill="white" opacity="0.65"/>
+  <!-- Current position glow -->
+  <circle cx="260" cy="400" r="56" fill="url(#glow)"/>
+  <!-- Current position pulse ring -->
+  <circle cx="260" cy="400" r="32" fill="none" stroke="white" stroke-width="2.5" opacity="0.35"/>
+  <!-- Current position dot -->
+  <circle cx="260" cy="400" r="22" fill="white"/>
+  <!-- Return arrow (curved) -->
+  <path d="M210,370 C180,340 190,300 220,290"
+        fill="none" stroke="#fbbf24" stroke-width="5" stroke-linecap="round" opacity="0.9"/>
+  <polygon points="222,280 228,294 214,292" fill="#fbbf24" opacity="0.9"/>
 </svg>
