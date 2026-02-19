@@ -179,6 +179,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                             return;
                         }
                     }
+                    return; // Stay stationary, don't emit breadcrumbs
                 } else {
                     // Check if we should enter stationary mode
                     // Need at least 30s of data and all fixes within 5m of current position

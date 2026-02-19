@@ -117,6 +117,12 @@ function wireA11yControls(root: HTMLElement): void {
             const isOn = toggleSimpleMode();
             simpleBtn.setAttribute('aria-pressed', String(isOn));
             simpleBtn.textContent = isOn ? 'Simple: On' : 'Simple: Off';
+            // Re-render navigation view if currently active
+            // GPS, compass, and feedback state are module-level and survive re-render
+            if (root.querySelector('#btn-stop-navigation')) {
+                // switchToNavigationView will re-add nav-active
+                switchToNavigationView(root);
+            }
         });
     }
 }
@@ -614,6 +620,7 @@ export function switchToNavigationView(
     breadcrumbsOverride?: Breadcrumb[]
 ): void {
     const followMode = breadcrumbsOverride !== undefined;
+    root.classList.add('nav-active');
     mountNavigationView(root);
     const nav = createNavigationService();
     const compass = createCompassService();
@@ -973,22 +980,47 @@ export function switchToNavigationView(
 
     const stopBtn = root.querySelector<HTMLButtonElement>('#btn-stop-navigation');
     if (stopBtn) {
-        stopBtn.addEventListener('click', () => {
-            openConfirmDialog(
-                'Stop directions?',
-                'You will stop getting directions. Your route is still saved \u2014 you can follow it again from Saved Routes.',
-                'Stop',
-                () => {
-                    feedback.cancelPending();
-                    compass.stop();
-                    navGps.stop();
-                    cleanupPocketMode();
-                    mountAppShell(root);
-                    startRecording(root);
-                },
-                { delay: 1500 }
-            );
+        const HOLD_MS = 1000;
+        let holdTimer: ReturnType<typeof setTimeout> | null = null;
+
+        function cancelHold(): void {
+            if (holdTimer) {
+                clearTimeout(holdTimer);
+                holdTimer = null;
+            }
+            stopBtn!.classList.remove('btn-hold--active');
+        }
+
+        function doStop(): void {
+            feedback.cancelPending();
+            compass.stop();
+            navGps.stop();
+            cleanupPocketMode();
+            root.classList.remove('nav-active');
+            mountAppShell(root);
+            startRecording(root);
+        }
+
+        stopBtn.addEventListener('pointerdown', (e: PointerEvent) => {
+            e.preventDefault();
+            stopBtn!.classList.add('btn-hold--active');
+            holdTimer = setTimeout(() => {
+                holdTimer = null;
+                stopBtn!.classList.remove('btn-hold--active');
+                openConfirmDialog(
+                    'Stop directions?',
+                    'You will stop getting directions. Your route is still saved \u2014 you can follow it again from Saved Routes.',
+                    'Stop',
+                    doStop,
+                    { delay: 1500 }
+                );
+            }, HOLD_MS);
         });
+        stopBtn.addEventListener('pointerup', cancelHold);
+        stopBtn.addEventListener('pointercancel', cancelHold);
+        stopBtn.addEventListener('pointerleave', cancelHold);
+        // Prevent click from firing after hold
+        stopBtn.addEventListener('click', (e: MouseEvent) => e.preventDefault());
     }
 }
 

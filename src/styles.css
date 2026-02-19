@@ -153,6 +153,12 @@ body {
     min-height: 100dvh;
 }
 
+/* Lock scrolling during navigation to prevent accidental button presses */
+#app.nav-active {
+    height: 100dvh;
+    overflow: hidden;
+}
+
 header {
     background: var(--color-header-bg);
     color: var(--color-header-text);
@@ -577,6 +583,34 @@ footer .btn {
 .nav-footer > .btn {
     width: 100%;
     max-width: 600px;
+}
+
+/* Stop navigation button: smaller, less prominent to reduce accidental taps */
+#btn-stop-navigation {
+    min-height: 44px;
+    font-size: 0.875rem;
+    max-width: 200px;
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* Hold-to-stop progress bar */
+#btn-stop-navigation::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 4px;
+    width: 0;
+    background: var(--color-primary);
+    border-radius: 0 2px 2px 0;
+}
+
+#btn-stop-navigation.btn-hold--active::after {
+    width: 100%;
+    transition: width 1s linear;
 }
 
 .recording-stats {

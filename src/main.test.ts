@@ -539,7 +539,9 @@ describe('switchToNavigationView', () => {
         vi.stubGlobal('isSecureContext', true);
 
         const stopBtn = root.querySelector<HTMLButtonElement>('#btn-stop-navigation');
-        stopBtn?.click();
+        // Simulate press-and-hold: pointerdown then wait 1s for the hold timer
+        stopBtn?.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(1000);
 
         // Confirm dialog should appear with delayed button
         const confirmBtn = document.querySelector<HTMLButtonElement>('#btn-confirm-yes');
