@@ -138,8 +138,8 @@ export function initSettings(): void {
         mediaQuery.removeEventListener('change', mediaListener);
     }
 
-    const storedSimple = readStorage<unknown>(SIMPLE_MODE_KEY, false);
-    currentSimpleMode = storedSimple === true;
+    const storedSimple = readStorage<unknown>(SIMPLE_MODE_KEY, true);
+    currentSimpleMode = storedSimple !== false;
     document.documentElement.dataset.simpleMode = currentSimpleMode ? 'true' : 'false';
 
     mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
