@@ -123,58 +123,51 @@ export function mountAppShell(root: HTMLElement): void {
 
 function renderFullRecordingView(): string {
     return `
-        <header>
-            <h1>Breadcrumbs</h1>
-        </header>
         ${renderA11yControls()}
-        <main>
-            <div class="card" id="recording-status-card">
-                <h2>Recording Status</h2>
-                <div id="status-indicator">
+        <main class="recording-main">
+            <div class="recording-compact" id="recording-status-card">
+                <div class="recording-compact__status">
                     <span class="status-badge status-badge--idle" id="status-badge" aria-live="polite">
                         <span class="status-dot" aria-hidden="true"></span>
                         <span id="status-text">Idle</span>
                     </span>
-                </div>
-                <div class="recording-stats" id="recording-stats" aria-live="polite" hidden>
-                    <div class="stat">
-                        <span class="stat-value" id="elapsed-time">0:00</span>
-                        <span class="stat-label">elapsed</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-value" id="distance-walked">0 m</span>
-                        <span class="stat-label">walked</span>
+                    <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
+                        Stationary
                     </div>
                 </div>
-                <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
-                    Stationary
+                <div class="recording-compact__stats" id="recording-stats" aria-live="polite" hidden>
+                    <span class="recording-compact__time" id="elapsed-time">0:00</span>
+                    <span class="recording-compact__sep" aria-hidden="true">&middot;</span>
+                    <span class="recording-compact__dist" id="distance-walked">0 m</span>
                 </div>
             </div>
             <div class="actions" role="group" aria-label="Route actions">
                 <button
-                    class="btn btn--primary"
+                    class="btn btn--primary btn--large"
                     id="btn-take-me-back"
                     aria-label="Take me back to my starting point"
                     disabled
                 >
                     Take me back
                 </button>
-                <button
-                    class="btn btn--secondary"
-                    id="btn-save-route"
-                    aria-label="Save this route for later"
-                    disabled
-                >
-                    Save this route
-                </button>
-                <button
-                    class="btn btn--landmark"
-                    id="btn-mark-landmark"
-                    aria-label="Mark this spot as a landmark"
-                    disabled
-                >
-                    Mark landmark
-                </button>
+                <div class="actions-row">
+                    <button
+                        class="btn btn--secondary"
+                        id="btn-save-route"
+                        aria-label="Save this route for later"
+                        disabled
+                    >
+                        Save route
+                    </button>
+                    <button
+                        class="btn btn--landmark"
+                        id="btn-mark-landmark"
+                        aria-label="Mark this spot as a landmark"
+                        disabled
+                    >
+                        Landmark
+                    </button>
+                </div>
                 <button
                     class="btn btn--secondary"
                     id="btn-view-routes"
@@ -184,7 +177,6 @@ function renderFullRecordingView(): string {
                 </button>
             </div>
         </main>
-        <footer>Breadcrumbs &mdash; map-free navigation</footer>
     `;
 }
 
@@ -213,17 +205,25 @@ function renderSimpleRecordingView(): string {
             >
                 TAKE ME BACK
             </button>
-            <button
-                class="simple-more-btn"
-                id="btn-simple-more"
-                aria-label="More options"
-            >
-                More&hellip;
-            </button>
+            <div class="simple-bottom-row">
+                <button
+                    class="btn btn--secondary"
+                    id="btn-simple-more"
+                    aria-label="More options"
+                >
+                    More&hellip;
+                </button>
+                <button
+                    class="btn btn--secondary"
+                    id="btn-view-routes"
+                    aria-label="View saved routes"
+                >
+                    Saved routes
+                </button>
+            </div>
             <div class="simple-more-panel" id="simple-more-panel" hidden>
                 <button class="btn btn--secondary" id="btn-save-route" aria-label="Save this route for later" disabled>Save this route</button>
                 <button class="btn btn--landmark" id="btn-mark-landmark" aria-label="Mark this spot as a landmark" disabled>Mark landmark</button>
-                <button class="btn btn--secondary" id="btn-view-routes" aria-label="View saved routes">Saved routes</button>
             </div>
         </main>
     `;
@@ -356,11 +356,8 @@ export function mountNavigationView(root: HTMLElement): void {
 
 function renderFullNavigationView(): string {
     return `
-        <header>
-            <h1>Breadcrumbs</h1>
-        </header>
         ${renderA11yControls()}
-        <main>
+        <main class="nav-main">
             <div class="nav-view">
                 <div class="nav-primary">
                     <div class="nav-trail-container">
@@ -389,15 +386,17 @@ function renderFullNavigationView(): string {
                 </div>
             </div>
         </main>
-        <footer>
+        <footer class="nav-footer">
+            <div class="nav-footer__row">
+                <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
+                    Pocket mode
+                </button>
+                <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode (tones and vibration only, no speech)" aria-pressed="false">
+                    Silent: Off
+                </button>
+            </div>
             <button class="btn btn--secondary" id="btn-stop-navigation" aria-label="Stop navigation and return to recording screen">
                 Stop navigation
-            </button>
-            <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
-                Pocket mode
-            </button>
-            <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode (tones and vibration only, no speech)" aria-pressed="false">
-                Silent mode: Off
             </button>
         </footer>
     `;
@@ -414,15 +413,17 @@ function renderSimpleNavigationView(): string {
                 <span id="nav-progress-text">Loading&hellip;</span>
             </div>
         </main>
-        <footer>
+        <footer class="nav-footer">
+            <div class="nav-footer__row">
+                <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
+                    Pocket mode
+                </button>
+                <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode" aria-pressed="false">
+                    Silent: Off
+                </button>
+            </div>
             <button class="btn btn--secondary" id="btn-stop-navigation" aria-label="Stop navigation and return to recording screen">
-                Stop
-            </button>
-            <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
-                Pocket mode
-            </button>
-            <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode" aria-pressed="false">
-                Silent mode: Off
+                Stop navigation
             </button>
         </footer>
     `;
@@ -883,12 +884,19 @@ export function switchToNavigationView(
     const stopBtn = root.querySelector<HTMLButtonElement>('#btn-stop-navigation');
     if (stopBtn) {
         stopBtn.addEventListener('click', () => {
-            feedback.cancelPending();
-            compass.stop();
-            navGps.stop();
-            cleanupPocketMode();
-            mountAppShell(root);
-            startRecording(root);
+            openConfirmDialog(
+                'Stop navigation?',
+                'You will stop receiving directions. A new recording will start.',
+                'Stop',
+                () => {
+                    feedback.cancelPending();
+                    compass.stop();
+                    navGps.stop();
+                    cleanupPocketMode();
+                    mountAppShell(root);
+                    startRecording(root);
+                }
+            );
         });
     }
 }
@@ -1119,9 +1127,6 @@ export function formatRouteDate(timestamp: number): string {
 
 export function mountSavedRoutesView(root: HTMLElement, onBack: () => void): void {
     root.innerHTML = `
-        <header>
-            <h1>Breadcrumbs</h1>
-        </header>
         ${renderA11yControls()}
         <main>
             <div class="routes-screen">
@@ -1133,7 +1138,6 @@ export function mountSavedRoutesView(root: HTMLElement, onBack: () => void): voi
                 </div>
             </div>
         </main>
-        <footer>Breadcrumbs &mdash; map-free navigation</footer>
     `;
 
     wireA11yControls(root);
@@ -1229,6 +1233,62 @@ function escapeHtml(text: string): string {
         .replace(/'/g, '&#39;');
 }
 
+export function openConfirmDialog(
+    title: string,
+    message: string,
+    confirmLabel: string,
+    onConfirm: () => void
+): void {
+    if (modalOpen) return;
+    modalOpen = true;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.setAttribute('aria-labelledby', 'confirm-modal-title');
+
+    backdrop.innerHTML = `
+        <div class="modal">
+            <h2 id="confirm-modal-title">${escapeHtml(title)}</h2>
+            <p class="confirm-dialog-text">${escapeHtml(message)}</p>
+            <div class="modal-actions">
+                <button class="btn btn--primary" id="btn-confirm-yes" aria-label="${escapeHtml(confirmLabel)}">${escapeHtml(confirmLabel)}</button>
+                <button class="btn btn--secondary" id="btn-confirm-cancel" aria-label="Cancel">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(backdrop);
+
+    function handleKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Escape') closeDialog();
+    }
+
+    function closeDialog(): void {
+        modalOpen = false;
+        document.removeEventListener('keydown', handleKeydown);
+        backdrop.remove();
+    }
+
+    document.addEventListener('keydown', handleKeydown);
+
+    const cancelBtn = backdrop.querySelector<HTMLButtonElement>('#btn-confirm-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', closeDialog);
+
+    backdrop.addEventListener('click', (e: MouseEvent) => {
+        if (e.target === backdrop) closeDialog();
+    });
+
+    const confirmBtn = backdrop.querySelector<HTMLButtonElement>('#btn-confirm-yes');
+    if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+            closeDialog();
+            onConfirm();
+        });
+    }
+}
+
 function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: () => void): void {
     if (modalOpen) return;
     modalOpen = true;
@@ -1298,6 +1358,88 @@ function openDeleteConfirmDialog(route: SavedRoute, root: HTMLElement, onBack: (
     }
 }
 
+/** Screen lock overlay to prevent accidental pocket presses during recording. */
+function createScreenLock(root: HTMLElement): { destroy: () => void } {
+    const LOCK_DELAY_MS = 15_000;
+    let lockTimer: ReturnType<typeof setTimeout> | null = null;
+    let overlay: HTMLElement | null = null;
+    let tapCount = 0;
+    let tapTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function showLock(): void {
+        if (overlay) return;
+        overlay = document.createElement('div');
+        overlay.className = 'screen-lock-overlay';
+        overlay.setAttribute('role', 'alertdialog');
+        overlay.setAttribute('aria-label', 'Screen locked. Double tap to unlock.');
+        overlay.innerHTML = `
+            <div class="screen-lock__content">
+                <div class="screen-lock__icon" aria-hidden="true">&#128274;</div>
+                <div class="screen-lock__text">Screen locked</div>
+                <div class="screen-lock__hint">Double-tap to unlock</div>
+            </div>
+        `;
+        overlay.addEventListener('click', handleOverlayTap);
+        // Prevent any touch events from reaching buttons underneath
+        overlay.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+        root.appendChild(overlay);
+    }
+
+    function hideLock(): void {
+        if (overlay) {
+            overlay.removeEventListener('click', handleOverlayTap);
+            overlay.remove();
+            overlay = null;
+        }
+        tapCount = 0;
+        if (tapTimer) {
+            clearTimeout(tapTimer);
+            tapTimer = null;
+        }
+        resetTimer();
+    }
+
+    function handleOverlayTap(): void {
+        tapCount++;
+        if (tapCount >= 2) {
+            hideLock();
+            return;
+        }
+        if (tapTimer) clearTimeout(tapTimer);
+        tapTimer = setTimeout(() => {
+            tapCount = 0;
+        }, 400);
+    }
+
+    function resetTimer(): void {
+        if (lockTimer) clearTimeout(lockTimer);
+        lockTimer = setTimeout(showLock, LOCK_DELAY_MS);
+    }
+
+    function handleActivity(): void {
+        if (!overlay) {
+            resetTimer();
+        }
+    }
+
+    root.addEventListener('touchstart', handleActivity, { passive: true });
+    root.addEventListener('click', handleActivity);
+    resetTimer();
+
+    function destroy(): void {
+        if (lockTimer) clearTimeout(lockTimer);
+        if (tapTimer) clearTimeout(tapTimer);
+        if (overlay) {
+            overlay.remove();
+            overlay = null;
+        }
+        root.removeEventListener('touchstart', handleActivity);
+        root.removeEventListener('click', handleActivity);
+    }
+
+    return { destroy };
+}
+
 export function startRecording(root: HTMLElement): void {
     if (!navigator.geolocation) {
         setStatusError(
@@ -1332,6 +1474,7 @@ export function startRecording(root: HTMLElement): void {
     let lastBreadcrumb: Breadcrumb | null = null;
     let startTime: number | null = null;
     let timerInterval: ReturnType<typeof setInterval> | null = null;
+    let screenLock: { destroy: () => void } | null = null;
 
     // Wire simple mode "More..." toggle
     const moreBtn = root.querySelector<HTMLButtonElement>('#btn-simple-more');
@@ -1344,14 +1487,22 @@ export function startRecording(root: HTMLElement): void {
         });
     }
 
+    function cleanupRecording(): void {
+        gps.stop();
+        if (timerInterval !== null) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+        if (screenLock) {
+            screenLock.destroy();
+            screenLock = null;
+        }
+    }
+
     const viewRoutesBtn = root.querySelector<HTMLButtonElement>('#btn-view-routes');
     if (viewRoutesBtn) {
         viewRoutesBtn.addEventListener('click', () => {
-            gps.stop();
-            if (timerInterval !== null) {
-                clearInterval(timerInterval);
-                timerInterval = null;
-            }
+            cleanupRecording();
             mountSavedRoutesView(root, () => {
                 mountAppShell(root);
                 startRecording(root);
@@ -1384,6 +1535,9 @@ export function startRecording(root: HTMLElement): void {
                 setStatusRecording(root);
                 enableActionButtons(root);
 
+                // Activate screen lock to prevent accidental pocket presses
+                screenLock = createScreenLock(root);
+
                 // Wire landmark button
                 const markBtn = root.querySelector<HTMLButtonElement>('#btn-mark-landmark');
                 if (markBtn) {
@@ -1409,12 +1563,15 @@ export function startRecording(root: HTMLElement): void {
                 const takeBackBtn = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
                 if (takeBackBtn) {
                     takeBackBtn.addEventListener('click', () => {
-                        gps.stop();
-                        if (timerInterval !== null) {
-                            clearInterval(timerInterval);
-                            timerInterval = null;
-                        }
-                        switchToNavigationView(root);
+                        openConfirmDialog(
+                            'End walk?',
+                            'This will stop recording and navigate you back to your starting point.',
+                            'Take me back',
+                            () => {
+                                cleanupRecording();
+                                switchToNavigationView(root);
+                            }
+                        );
                     });
                 }
 
@@ -1422,11 +1579,7 @@ export function startRecording(root: HTMLElement): void {
                 if (saveBtn) {
                     saveBtn.addEventListener('click', () => {
                         const onSaved = () => {
-                            gps.stop();
-                            if (timerInterval !== null) {
-                                clearInterval(timerInterval);
-                                timerInterval = null;
-                            }
+                            cleanupRecording();
                             mountAppShell(root);
                             startRecording(root);
                         };
