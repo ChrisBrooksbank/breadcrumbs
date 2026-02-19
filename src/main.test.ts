@@ -15,6 +15,8 @@ import {
     createOffCourseDetector,
     majorTurnDirection,
     updateStationaryBadge,
+    shortestArcDistance,
+    lerpAngle,
 } from './main';
 import { clearSession, appendBreadcrumb, listRoutes, saveRoute, deleteRoute } from './storage';
 import { setFontSize, FONT_SIZES } from './settings';
@@ -1726,5 +1728,69 @@ describe('Route card landmark count', () => {
 
         const meta = root.querySelector('.route-card__meta');
         expect(meta?.textContent).toContain('2 landmarks');
+    });
+});
+
+describe('shortestArcDistance', () => {
+    it('returns 0 for identical angles', () => {
+        expect(shortestArcDistance(90, 90)).toBe(0);
+    });
+
+    it('returns correct distance for small differences', () => {
+        expect(shortestArcDistance(10, 13)).toBe(3);
+    });
+
+    it('returns correct distance across 360/0 boundary', () => {
+        expect(shortestArcDistance(350, 10)).toBe(20);
+    });
+
+    it('returns correct distance in reverse direction across boundary', () => {
+        expect(shortestArcDistance(10, 350)).toBe(20);
+    });
+
+    it('returns 180 for opposite angles', () => {
+        expect(shortestArcDistance(0, 180)).toBe(180);
+    });
+
+    it('filters sub-threshold changes (deadzone use case)', () => {
+        // 3° change should be below 4° deadzone
+        expect(shortestArcDistance(100, 103)).toBeLessThan(4);
+        // 5° change should exceed 4° deadzone
+        expect(shortestArcDistance(100, 105)).toBeGreaterThanOrEqual(4);
+    });
+});
+
+describe('lerpAngle', () => {
+    it('returns start angle when t=0', () => {
+        expect(lerpAngle(90, 180, 0)).toBe(90);
+    });
+
+    it('returns end angle when t=1', () => {
+        expect(lerpAngle(90, 180, 1)).toBe(180);
+    });
+
+    it('returns midpoint when t=0.5', () => {
+        expect(lerpAngle(0, 90, 0.5)).toBe(45);
+    });
+
+    it('interpolates correctly across 360/0 boundary', () => {
+        // From 350 to 10 (shortest arc is +20°), t=0.5 -> 0°
+        expect(lerpAngle(350, 10, 0.5)).toBe(0);
+    });
+
+    it('converges toward target over repeated calls', () => {
+        let displayed = 0;
+        const target = 90;
+        for (let i = 0; i < 20; i++) {
+            displayed = lerpAngle(displayed, target, 0.3);
+        }
+        // After 20 iterations of 30% LERP, should be very close to target
+        expect(Math.abs(displayed - target)).toBeLessThan(1);
+    });
+
+    it('takes shortest arc (does not go the long way around)', () => {
+        // From 10 to 350 — shortest arc is -20°, not +340°
+        const result = lerpAngle(10, 350, 0.5);
+        expect(result).toBe(0);
     });
 });

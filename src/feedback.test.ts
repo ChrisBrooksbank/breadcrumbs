@@ -1148,3 +1148,68 @@ describe('classifyDirectionWithHysteresis', () => {
         expect(dir).toBe('straight ahead');
     });
 });
+
+describe('FeedbackService – vibrateAlignment hysteresis', () => {
+    let vibrateMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        vibrateMock = vi.fn();
+        Object.defineProperty(navigator, 'vibrate', {
+            value: vibrateMock,
+            configurable: true,
+            writable: true,
+        });
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (navigator as any).vibrate;
+    });
+
+    it('does not toggle vibration rapidly at ±30° boundary', () => {
+        const service = createFeedbackService();
+        // Start aligned at 0° — vibrates
+        service.vibrateAlignment(0);
+        expect(vibrateMock).toHaveBeenCalledTimes(1);
+        vibrateMock.mockClear();
+
+        // Oscillate around 30° boundary — hysteresis should keep it "straight ahead"
+        service.vibrateAlignment(31);
+        expect(vibrateMock).toHaveBeenCalledTimes(1); // still within hysteresis band (31 < 38)
+
+        vibrateMock.mockClear();
+        service.vibrateAlignment(29);
+        expect(vibrateMock).toHaveBeenCalledTimes(1); // still straight ahead
+
+        vibrateMock.mockClear();
+        service.vibrateAlignment(31);
+        expect(vibrateMock).toHaveBeenCalledTimes(1); // still straight ahead — no toggling
+    });
+
+    it('stops vibrating once clearly outside alignment (beyond hysteresis band)', () => {
+        const service = createFeedbackService();
+        // Start aligned
+        service.vibrateAlignment(0);
+        expect(vibrateMock).toHaveBeenCalledTimes(1);
+        vibrateMock.mockClear();
+
+        // Move to 40° — beyond 30+8=38° hysteresis band
+        service.vibrateAlignment(40);
+        expect(vibrateMock).not.toHaveBeenCalled(); // no vibration for turn right
+    });
+
+    it('resetAlignmentHysteresis() allows fresh classification', () => {
+        const service = createFeedbackService();
+        // Build up "turn right" state
+        service.vibrateAlignment(50);
+        expect(vibrateMock).not.toHaveBeenCalled();
+
+        // Reset hysteresis
+        service.resetAlignmentHysteresis();
+
+        // Now 25° should classify as straight ahead (fresh, no hysteresis)
+        service.vibrateAlignment(25);
+        expect(vibrateMock).toHaveBeenCalledTimes(1);
+    });
+});

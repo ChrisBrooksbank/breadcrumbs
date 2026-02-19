@@ -595,6 +595,20 @@ export function createOffCourseDetector(
     return { check, reset };
 }
 
+/** Shortest angular distance between two angles in degrees (0..180). */
+export function shortestArcDistance(a: number, b: number): number {
+    let diff = (((b - a) % 360) + 360) % 360;
+    if (diff > 180) diff = 360 - diff;
+    return diff;
+}
+
+/** Interpolate from angle `a` toward angle `b` by `t` (0..1), using shortest arc. */
+export function lerpAngle(a: number, b: number, t: number): number {
+    let diff = (((b - a) % 360) + 360) % 360;
+    if (diff > 180) diff -= 360;
+    return (((a + diff * t) % 360) + 360) % 360;
+}
+
 export function switchToNavigationView(
     root: HTMLElement,
     breadcrumbsOverride?: Breadcrumb[]
@@ -670,6 +684,12 @@ export function switchToNavigationView(
     let bearingToBreadcrumb: number | null = null;
     let trailBreadcrumbs: Breadcrumb[] = [];
 
+    // Arrow smoothing state: deadzone + LERP
+    let targetArrowDeg: number | null = null;
+    let displayedArrowDeg: number | null = null;
+    const ARROW_DEADZONE_DEG = 4;
+    const ARROW_LERP_FACTOR = 0.3;
+
     const offCourseDetector = createOffCourseDetector();
 
     // Direction reliability: position smoother, heading fusion, hysteresis state
@@ -694,16 +714,37 @@ export function switchToNavigationView(
     }
 
     function refreshArrow(): void {
-        const target = nav.targetBreadcrumb;
-        // Use smoothed position for bearing calculation to reduce jitter
+        // Use look-ahead point for stable bearing (same pattern as simple mode)
         const posForBearing = smoother.smoothed ?? currentPos;
-        if (posForBearing && target) {
-            bearingToBreadcrumb = bearingDegrees(posForBearing, target);
+        if (posForBearing) {
+            let bearingTarget = nav.targetBreadcrumb;
+            if (trailBreadcrumbs.length > 0) {
+                bearingTarget = lookAheadPoint(trailBreadcrumbs, nav.progress.currentIndex, 30);
+            }
+            if (bearingTarget) {
+                bearingToBreadcrumb = bearingDegrees(posForBearing, bearingTarget);
+            }
         }
         const heading = fusion.fusedHeading ?? compass.compassHeading;
         if (bearingToBreadcrumb !== null && heading !== null) {
-            const arrowDeg = (bearingToBreadcrumb - heading + 360) % 360;
-            updateNavArrow(root, arrowDeg);
+            const rawDeg = (bearingToBreadcrumb - heading + 360) % 360;
+
+            // Deadzone: only update target if change exceeds threshold
+            if (
+                targetArrowDeg === null ||
+                shortestArcDistance(rawDeg, targetArrowDeg) >= ARROW_DEADZONE_DEG
+            ) {
+                targetArrowDeg = rawDeg;
+            }
+
+            // LERP: smoothly interpolate displayed angle toward target
+            if (displayedArrowDeg === null) {
+                displayedArrowDeg = targetArrowDeg;
+            } else {
+                displayedArrowDeg = lerpAngle(displayedArrowDeg, targetArrowDeg, ARROW_LERP_FACTOR);
+            }
+
+            updateNavArrow(root, displayedArrowDeg);
         }
     }
 
@@ -870,6 +911,10 @@ export function switchToNavigationView(
                         feedback.resetDistanceAnnouncements();
                         offCourseDetector.reset();
                         previousDirection = null; // reset hysteresis on breadcrumb advance
+                        // Reset arrow smoothing so it snaps to the new target
+                        targetArrowDeg = null;
+                        displayedArrowDeg = null;
+                        feedback.resetAlignmentHysteresis();
                         landmarkAnnouncedFar = false;
                         landmarkAnnouncedNear = false;
                         if (nav.progress.arrived) {

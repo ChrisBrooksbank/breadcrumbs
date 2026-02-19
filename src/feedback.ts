@@ -143,8 +143,11 @@ export interface FeedbackService {
      * Vibrate to indicate directional alignment. Call with the bearing delta
      * (target bearing minus compass heading, -180..+180). Produces a short
      * pulse when aligned (±30°), no vibration otherwise.
+     * Uses hysteresis to prevent rapid toggling at the ±30° boundary.
      */
     vibrateAlignment(bearingDelta: number): void;
+    /** Reset alignment hysteresis state (call when advancing to next breadcrumb). */
+    resetAlignmentHysteresis(): void;
     /**
      * Vibrate based on proximity to the target breadcrumb. Closer distances
      * produce stronger/faster patterns. No-ops when Vibration API is absent.
@@ -362,8 +365,12 @@ export function createFeedbackService(): FeedbackService {
         navigator.vibrate(pattern);
     }
 
+    // Alignment hysteresis state to prevent vibration flickering at ±30° boundary
+    let lastAlignmentDir: Direction | null = null;
+
     function vibrateAlignment(bearingDelta: number): void {
-        const direction = classifyDirection(bearingDelta);
+        const direction = classifyDirectionWithHysteresis(bearingDelta, lastAlignmentDir);
+        lastAlignmentDir = direction;
         if (direction === 'straight ahead') {
             if (vibrationAvailable) {
                 // Single short pulse: user is aligned with target
@@ -374,6 +381,10 @@ export function createFeedbackService(): FeedbackService {
             }
         }
         // No feedback for other directions — avoid confusion with directional cues
+    }
+
+    function resetAlignmentHysteresis(): void {
+        lastAlignmentDir = null;
     }
 
     function vibrateProximity(distanceMeters: number): void {
@@ -409,6 +420,7 @@ export function createFeedbackService(): FeedbackService {
         playOffRouteFeedback,
         playBackOnTrackFeedback,
         vibrateAlignment,
+        resetAlignmentHysteresis,
         vibrateProximity,
         get speechAvailable() {
             return speechAvailable;
