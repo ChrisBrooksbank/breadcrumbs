@@ -63,6 +63,29 @@ export function pointToSegmentMeters(
     return Math.sqrt(closestX * closestX + closestY * closestY);
 }
 
+/**
+ * Sum of haversine distances along the trail from currentPos through
+ * remaining breadcrumbs starting at trailIndex.
+ * Returns the approximate walking distance left to the end of the trail.
+ */
+export function remainingTrailDistance(
+    currentPos: Breadcrumb,
+    trail: Breadcrumb[],
+    trailIndex: number
+): number {
+    if (trailIndex >= trail.length) return 0;
+
+    // Distance from current position to the current target
+    let total = haversineMeters(currentPos, trail[trailIndex]);
+
+    // Plus distances between successive remaining breadcrumbs
+    for (let i = trailIndex; i < trail.length - 1; i++) {
+        total += haversineMeters(trail[i], trail[i + 1]);
+    }
+
+    return total;
+}
+
 export function bearingDegrees(from: Breadcrumb, to: Breadcrumb): number {
     const lat1 = toRadians(from.lat);
     const lat2 = toRadians(to.lat);
