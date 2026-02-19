@@ -11,7 +11,7 @@ import {
     clearSession,
     updateLastBreadcrumb,
 } from '@/storage';
-import { haversineMeters, bearingDegrees } from '@/geo';
+import { haversineMeters, bearingDegrees, remainingTrailDistance } from '@/geo';
 import { createNavigationService, createCompassService } from '@/navigation';
 import { createWakeLockManager } from '@/wake-lock';
 import { createAudioKeepAlive } from '@/audio-keepalive';
@@ -409,6 +409,7 @@ function renderSimpleNavigationView(): string {
         <main class="simple-nav" id="simple-nav" aria-live="polite">
             <div class="simple-nav__direction" id="simple-direction">STRAIGHT</div>
             <div class="simple-nav__distance" id="nav-distance-value">--</div>
+            <div class="simple-nav__label">to start</div>
             <div class="simple-nav__progress" id="nav-progress" aria-live="polite">
                 <span id="nav-progress-text">Loading&hellip;</span>
             </div>
@@ -441,7 +442,13 @@ function updateNavDistance(root: HTMLElement, meters: number): void {
 
 function updateNavProgress(root: HTMLElement, current: number, total: number): void {
     const el = root.querySelector('#nav-progress-text');
-    if (el) el.textContent = `Breadcrumb ${current} of ${total}`;
+    if (!el) return;
+    if (getSimpleMode()) {
+        const remaining = total - current;
+        el.textContent = remaining === 1 ? '1 breadcrumb to go' : `${remaining} breadcrumbs to go`;
+    } else {
+        el.textContent = `Breadcrumb ${current} of ${total}`;
+    }
 }
 
 /** Map classifyDirection output to a simple display word. */
@@ -777,7 +784,16 @@ export function switchToNavigationView(
                     const target = nav.targetBreadcrumb;
                     if (target) {
                         const dist = haversineMeters(breadcrumb, target);
-                        updateNavDistance(root, dist);
+                        if (getSimpleMode()) {
+                            const distToStart = remainingTrailDistance(
+                                breadcrumb,
+                                trailBreadcrumbs,
+                                nav.progress.currentIndex
+                            );
+                            updateNavDistance(root, distToStart);
+                        } else {
+                            updateNavDistance(root, dist);
+                        }
                         feedback.announceDistance(dist);
                         feedback.vibrateProximity(dist);
 
