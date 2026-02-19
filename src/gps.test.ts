@@ -644,6 +644,75 @@ describe('GeolocationService – stationary detection', () => {
     });
 });
 
+describe('GeolocationService – onStationaryChange', () => {
+    let watchCallback: PositionCallback;
+    let watchPositionMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        watchPositionMock = vi.fn((success: PositionCallback) => {
+            watchCallback = success;
+            return 1;
+        });
+        vi.stubGlobal('navigator', {
+            geolocation: {
+                watchPosition: watchPositionMock,
+                clearWatch: vi.fn(),
+            },
+        });
+        return () => {
+            vi.unstubAllGlobals();
+        };
+    });
+
+    it('onStationaryChange is null by default', () => {
+        const service = createGeolocationService();
+        expect(service.onStationaryChange).toBeNull();
+    });
+
+    it('can set and get onStationaryChange callback', () => {
+        const service = createGeolocationService();
+        const cb = vi.fn();
+        service.onStationaryChange = cb;
+        expect(service.onStationaryChange).toBe(cb);
+    });
+
+    it('fires onStationaryChange(true) when entering stationary mode', () => {
+        const service = createGeolocationService();
+        const cb = vi.fn();
+        service.onStationaryChange = cb;
+        service.start(vi.fn());
+
+        const lat = 51.5;
+        const lng = -0.1;
+        watchCallback(makePosition(lat, lng, 5, 0));
+        watchCallback(makePosition(lat, lng, 5, 15_000));
+        watchCallback(makePosition(lat, lng, 5, 30_000));
+
+        expect(cb).toHaveBeenCalledWith(true);
+    });
+
+    it('fires onStationaryChange(false) when exiting stationary mode via movement', () => {
+        const service = createGeolocationService();
+        const cb = vi.fn();
+        service.onStationaryChange = cb;
+        service.start(vi.fn());
+
+        const lat = 51.5;
+        const lng = -0.1;
+        // Enter stationary
+        watchCallback(makePosition(lat, lng, 5, 0));
+        watchCallback(makePosition(lat, lng, 5, 15_000));
+        watchCallback(makePosition(lat, lng, 5, 30_000));
+        expect(cb).toHaveBeenCalledWith(true);
+
+        cb.mockClear();
+
+        // Exit stationary via movement >5m
+        watchCallback(makePosition(lat + 0.000054, lng, 5, 35_000));
+        expect(cb).toHaveBeenCalledWith(false);
+    });
+});
+
 describe('GeolocationService – isSuspended and onSuspendedChange', () => {
     let watchCallback: PositionCallback;
 

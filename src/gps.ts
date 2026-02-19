@@ -70,6 +70,8 @@ export interface GeolocationService {
     readonly isStationary: boolean;
     /** True when GPS is fully suspended due to prolonged motionlessness. */
     readonly isSuspended: boolean;
+    /** Called when stationary state changes. */
+    onStationaryChange: ((stationary: boolean) => void) | null;
     /** Called when suspension state changes. */
     onSuspendedChange: ((suspended: boolean) => void) | null;
     /** Switch enableHighAccuracy on the fly (restarts the GPS watcher). */
@@ -101,6 +103,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
     const motionEnabled = !options?.disableMotionSuspension;
     const motion = motionEnabled ? createMotionDetector() : null;
     let suspended = false;
+    let onStationaryChange: ((stationary: boolean) => void) | null = null;
     let onSuspendedChange: ((suspended: boolean) => void) | null = null;
     let savedOnBreadcrumb: BreadcrumbCallback | null = null;
     let savedOnError: ErrorCallback | undefined;
@@ -151,6 +154,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                             // Movement detected — exit stationary mode and restart in high-accuracy mode
                             currentlyStationary = false;
                             stationaryPoint = null;
+                            onStationaryChange?.(false);
                             if (motion) motion.stop();
                             if (suspended) {
                                 suspended = false;
@@ -177,6 +181,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                         if (allClose) {
                             currentlyStationary = true;
                             stationaryPoint = rawFix;
+                            onStationaryChange?.(true);
                             if (motion) motion.start();
                             // Restart watcher in low-power mode
                             if (watchId !== null) {
@@ -239,6 +244,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                     suspended = false;
                     currentlyStationary = false;
                     stationaryPoint = null;
+                    onStationaryChange?.(false);
                     motion.stop();
                     onSuspendedChange?.(false);
                     if (savedOnBreadcrumb) {
@@ -284,6 +290,12 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
         },
         get isSuspended() {
             return suspended;
+        },
+        get onStationaryChange() {
+            return onStationaryChange;
+        },
+        set onStationaryChange(cb: ((stationary: boolean) => void) | null) {
+            onStationaryChange = cb;
         },
         get onSuspendedChange() {
             return onSuspendedChange;

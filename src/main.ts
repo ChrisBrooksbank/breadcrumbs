@@ -1379,6 +1379,11 @@ export function startRecording(root: HTMLElement): void {
                     });
                 }
 
+                // Wire stationary badge
+                gps.onStationaryChange = (isStationary: boolean) => {
+                    updateStationaryBadge(root, isStationary, gps.isSuspended);
+                };
+
                 // Wire suspension badge
                 gps.onSuspendedChange = (isSuspended: boolean) => {
                     updateStationaryBadge(root, gps.isStationary, isSuspended);
