@@ -76,6 +76,12 @@ export interface GeolocationService {
     onSuspendedChange: ((suspended: boolean) => void) | null;
     /** Switch enableHighAccuracy on the fly (restarts the GPS watcher). */
     setHighAccuracy(value: boolean): void;
+    /** Recent bearing history from raw GPS fixes (for heading fusion). */
+    readonly rawBearingHistory: readonly number[];
+    /** Most recent raw GPS fix (unfiltered). */
+    readonly lastRawFix: Breadcrumb | null;
+    /** The raw fix before lastRawFix (for computing inter-fix distance). */
+    readonly previousRawFix: Breadcrumb | null;
 }
 
 interface TimestampedFix {
@@ -88,6 +94,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
     let lastBreadcrumb: Breadcrumb | null = null;
 
     // Raw fix tracking for movement bearing (includes fixes rejected by accuracy/distance filters)
+    let previousRawFix: Breadcrumb | null = null;
     let lastRawFix: Breadcrumb | null = null;
     let currentMovementBearing: number | null = null;
 
@@ -136,6 +143,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                         if (rawBearingHistory.length > 10) rawBearingHistory.shift();
                     }
                 }
+                previousRawFix = lastRawFix;
                 lastRawFix = rawFix;
 
                 // --- Stationary detection ---
@@ -302,6 +310,15 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
         },
         set onSuspendedChange(cb: ((suspended: boolean) => void) | null) {
             onSuspendedChange = cb;
+        },
+        get rawBearingHistory(): readonly number[] {
+            return rawBearingHistory;
+        },
+        get lastRawFix() {
+            return lastRawFix;
+        },
+        get previousRawFix() {
+            return previousRawFix;
         },
     };
 }
