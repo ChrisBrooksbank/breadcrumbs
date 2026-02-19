@@ -1352,6 +1352,7 @@ export function startRecording(root: HTMLElement): void {
             try {
                 await appendBreadcrumb(breadcrumb);
             } catch (e) {
+                // eslint-disable-next-line no-console
                 console.error('Failed to persist breadcrumb:', e);
             }
             breadcrumbCount++;
