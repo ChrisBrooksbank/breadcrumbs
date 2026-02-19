@@ -30,6 +30,7 @@ import {
 } from '@/settings';
 import type { ThemeMode } from '@/settings';
 import { classifyDirection } from '@/feedback';
+import { createHeadingFusionService } from '@/heading';
 import { LANDMARK_PRESETS } from '@/landmarks';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
@@ -491,6 +492,16 @@ function updateSimpleDirection(root: HTMLElement, bearingDelta: number): void {
     }
 }
 
+function updateSimpleDirectionKeepWalking(root: HTMLElement): void {
+    const dirEl = root.querySelector<HTMLElement>('#simple-direction');
+    const navEl = root.querySelector<HTMLElement>('#simple-nav');
+    if (dirEl) dirEl.textContent = 'KEEP WALKING';
+    if (navEl) {
+        navEl.classList.remove('simple-nav--on-track', 'simple-nav--turn', 'simple-nav--wrong');
+        navEl.classList.add('simple-nav--turn');
+    }
+}
+
 function showNavArrived(root: HTMLElement): void {
     const el = root.querySelector('#nav-progress-text');
     if (el) el.textContent = "You've arrived!";
@@ -600,6 +611,7 @@ export function switchToNavigationView(
     const nav = createNavigationService();
     const compass = createCompassService();
     const feedback = createFeedbackService();
+    const headingFusion = createHeadingFusionService();
 
     // Wire up silent mode toggle
     const silentBtn = root.querySelector<HTMLButtonElement>('#btn-silent-mode');
@@ -703,12 +715,20 @@ export function switchToNavigationView(
         refreshArrow();
         refreshCalibrationHint();
         renderTrail();
+        if (compass.compassHeading !== null) {
+            headingFusion.updateFromCompass(compass.compassHeading);
+        }
         if (bearingToBreadcrumb !== null && compass.compassHeading !== null) {
             const delta = bearingToBreadcrumb - compass.compassHeading;
             feedback.vibrateAlignment(delta);
-            // Update simple mode direction display
-            if (getSimpleMode()) {
-                updateSimpleDirection(root, delta);
+        }
+        // Simple mode: use fused heading for direction display
+        if (getSimpleMode() && bearingToBreadcrumb !== null) {
+            const effHeading = headingFusion.effectiveHeading;
+            if (effHeading !== null) {
+                updateSimpleDirection(root, bearingToBreadcrumb - effHeading);
+            } else {
+                updateSimpleDirectionKeepWalking(root);
             }
         }
     };
@@ -771,6 +791,14 @@ export function switchToNavigationView(
             navGps.start(
                 (breadcrumb: Breadcrumb) => {
                     currentPos = breadcrumb;
+
+                    // Feed heading fusion service with GPS data
+                    headingFusion.updateFromGps(
+                        breadcrumb,
+                        navGps.previousRawFix,
+                        breadcrumb.timestamp
+                    );
+                    headingFusion.setBearingHistory(navGps.rawBearingHistory);
 
                     if (nav.progress.arrived) {
                         showNavArrived(root);
@@ -849,14 +877,21 @@ export function switchToNavigationView(
                         const p = nav.progress;
                         updateNavProgress(root, p.currentIndex + 1, p.total);
                         // Check for sustained off-course heading on GPS updates
-                        if (bearingToBreadcrumb !== null && compass.compassHeading !== null) {
-                            if (
-                                offCourseDetector.check(
-                                    bearingToBreadcrumb - compass.compassHeading
-                                )
-                            ) {
+                        const effHeading = headingFusion.effectiveHeading;
+                        if (bearingToBreadcrumb !== null && effHeading !== null) {
+                            if (offCourseDetector.check(bearingToBreadcrumb - effHeading)) {
                                 feedback.speak("you're going the wrong way");
                             }
+                        }
+                    }
+
+                    // Update simple mode direction from fused heading on GPS update
+                    if (getSimpleMode() && bearingToBreadcrumb !== null) {
+                        const effHeading = headingFusion.effectiveHeading;
+                        if (effHeading !== null) {
+                            updateSimpleDirection(root, bearingToBreadcrumb - effHeading);
+                        } else {
+                            updateSimpleDirectionKeepWalking(root);
                         }
                     }
 

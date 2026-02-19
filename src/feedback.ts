@@ -17,7 +17,8 @@ export type Direction =
     | 'straight ahead'
     | 'turn right'
     | 'turn left'
-    | "you're going the wrong way";
+    | "you're going the wrong way"
+    | 'keep walking';
 
 /**
  * Classify a bearing delta (target bearing minus compass heading, normalised
