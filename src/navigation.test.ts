@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { createNavigationService, createCompassService, smoothHeading } from '@/navigation';
+import {
+    createNavigationService,
+    createCompassService,
+    smoothHeading,
+    createPositionSmoother,
+} from '@/navigation';
 import type { Breadcrumb } from '@/types';
 
 // Helper: build a breadcrumb offset from a reference point by dx (east, m) and dy (north, m)
@@ -723,5 +728,69 @@ describe('NavigationService – off-route detection with debounce', () => {
         service.advanceIfClose(offsetCrumb(35, 100), 5);
         service.advanceIfClose(offsetCrumb(35, 100), 5);
         expect(service.isOffRoute).toBe(false);
+    });
+});
+
+describe('PositionSmoother', () => {
+    it('returns null when no fixes have been pushed', () => {
+        const smoother = createPositionSmoother(3);
+        expect(smoother.smoothed).toBeNull();
+    });
+
+    it('returns the single fix when only one has been pushed', () => {
+        const smoother = createPositionSmoother(3);
+        const fix = makeBreadcrumb(51.5, -0.1);
+        smoother.push(fix);
+        expect(smoother.smoothed).toEqual(fix);
+    });
+
+    it('returns weighted average of two fixes (recent weighted higher)', () => {
+        const smoother = createPositionSmoother(3);
+        smoother.push(makeBreadcrumb(0, 0));
+        smoother.push(makeBreadcrumb(3, 3));
+        // Weights: [1, 2], total=3
+        // lat = (0*1 + 3*2)/3 = 2, lng = (0*1 + 3*2)/3 = 2
+        const result = smoother.smoothed!;
+        expect(result.lat).toBeCloseTo(2, 5);
+        expect(result.lng).toBeCloseTo(2, 5);
+    });
+
+    it('returns weighted average of three fixes', () => {
+        const smoother = createPositionSmoother(3);
+        smoother.push(makeBreadcrumb(0, 0));
+        smoother.push(makeBreadcrumb(6, 6));
+        smoother.push(makeBreadcrumb(12, 12));
+        // Weights: [1, 2, 3], total=6
+        // lat = (0*1 + 6*2 + 12*3)/6 = 48/6 = 8
+        const result = smoother.smoothed!;
+        expect(result.lat).toBeCloseTo(8, 5);
+        expect(result.lng).toBeCloseTo(8, 5);
+    });
+
+    it('drops oldest fixes beyond buffer size', () => {
+        const smoother = createPositionSmoother(2);
+        smoother.push(makeBreadcrumb(0, 0));
+        smoother.push(makeBreadcrumb(10, 10));
+        smoother.push(makeBreadcrumb(20, 20));
+        // Buffer now: [10, 20], weights: [1, 2], total=3
+        // lat = (10*1 + 20*2)/3 = 50/3 ≈ 16.67
+        const result = smoother.smoothed!;
+        expect(result.lat).toBeCloseTo(50 / 3, 5);
+    });
+
+    it('reset clears the buffer', () => {
+        const smoother = createPositionSmoother(3);
+        smoother.push(makeBreadcrumb(51.5, -0.1));
+        smoother.reset();
+        expect(smoother.smoothed).toBeNull();
+    });
+
+    it('uses accuracy and timestamp from the most recent fix', () => {
+        const smoother = createPositionSmoother(3);
+        smoother.push(makeBreadcrumb(0, 0, 10, 100));
+        smoother.push(makeBreadcrumb(1, 1, 5, 200));
+        const result = smoother.smoothed!;
+        expect(result.accuracy).toBe(5);
+        expect(result.timestamp).toBe(200);
     });
 });

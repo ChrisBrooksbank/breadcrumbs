@@ -86,6 +86,49 @@ export function remainingTrailDistance(
     return total;
 }
 
+/**
+ * Find a look-ahead point along the trail polyline, a given distance ahead
+ * from startIndex. Interpolates between breadcrumbs when the distance falls
+ * mid-segment. Returns the last breadcrumb if the trail is shorter than
+ * the requested distance.
+ *
+ * @param trail - The ordered trail breadcrumbs
+ * @param startIndex - Index to start looking ahead from
+ * @param distanceMeters - How far ahead to look (default 30m)
+ * @returns The interpolated look-ahead point
+ */
+export function lookAheadPoint(
+    trail: Breadcrumb[],
+    startIndex: number,
+    distanceMeters = 30
+): Breadcrumb {
+    if (trail.length === 0) {
+        throw new Error('Trail must not be empty');
+    }
+    if (startIndex >= trail.length - 1) {
+        return trail[trail.length - 1];
+    }
+
+    let remaining = distanceMeters;
+    for (let i = startIndex; i < trail.length - 1; i++) {
+        const segLen = haversineMeters(trail[i], trail[i + 1]);
+        if (segLen >= remaining) {
+            // Interpolate within this segment
+            const t = remaining / segLen;
+            return {
+                lat: trail[i].lat + t * (trail[i + 1].lat - trail[i].lat),
+                lng: trail[i].lng + t * (trail[i + 1].lng - trail[i].lng),
+                accuracy: trail[i + 1].accuracy,
+                timestamp: trail[i + 1].timestamp,
+            };
+        }
+        remaining -= segLen;
+    }
+
+    // Trail shorter than requested distance — return last point
+    return trail[trail.length - 1];
+}
+
 export function bearingDegrees(from: Breadcrumb, to: Breadcrumb): number {
     const lat1 = toRadians(from.lat);
     const lat2 = toRadians(to.lat);

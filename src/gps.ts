@@ -66,6 +66,8 @@ export interface GeolocationService {
     stop(): void;
     /** Most recently computed bearing from raw GPS fixes (degrees, 0–360). null until 2+ fixes received. */
     readonly movementBearing: number | null;
+    /** Estimated speed in m/s from distance/time between consecutive raw fixes. null until 2+ fixes. */
+    readonly estimatedSpeedMs: number | null;
     /** True when in low-power stationary mode (no movement >5m for 30s). */
     readonly isStationary: boolean;
     /** True when GPS is fully suspended due to prolonged motionlessness. */
@@ -87,9 +89,11 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
     let watchId: number | null = null;
     let lastBreadcrumb: Breadcrumb | null = null;
 
-    // Raw fix tracking for movement bearing (includes fixes rejected by accuracy/distance filters)
+    // Raw fix tracking for movement bearing and speed
     let lastRawFix: Breadcrumb | null = null;
+    let lastRawTimestamp: number | null = null;
     let currentMovementBearing: number | null = null;
+    let currentSpeedMs: number | null = null;
 
     // Bearing history for adaptive threshold (from raw fixes with meaningful movement)
     const rawBearingHistory: number[] = [];
@@ -125,18 +129,25 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                     timestamp: now,
                 };
 
-                // Update movement bearing from every raw fix (regardless of accuracy/distance filters)
+                // Update movement bearing and speed from every raw fix
                 if (lastRawFix !== null) {
                     const rawDistance = haversineMeters(lastRawFix, rawFix);
                     // Only update bearing if the fix has moved enough to be meaningful (>1m)
                     if (rawDistance > 1) {
                         currentMovementBearing = bearingDegrees(lastRawFix, rawFix);
                         rawBearingHistory.push(currentMovementBearing);
-                        // Keep history bounded to avoid unbounded growth
                         if (rawBearingHistory.length > 10) rawBearingHistory.shift();
+                    }
+                    // Update speed estimate from time/distance between fixes
+                    if (lastRawTimestamp !== null) {
+                        const dtMs = now - lastRawTimestamp;
+                        if (dtMs > 0) {
+                            currentSpeedMs = (rawDistance / dtMs) * 1000;
+                        }
                     }
                 }
                 lastRawFix = rawFix;
+                lastRawTimestamp = now;
 
                 // --- Stationary detection ---
                 // Add current fix to sliding window and prune old entries
@@ -284,6 +295,9 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
         setHighAccuracy,
         get movementBearing() {
             return currentMovementBearing;
+        },
+        get estimatedSpeedMs() {
+            return currentSpeedMs;
         },
         get isStationary() {
             return currentlyStationary;

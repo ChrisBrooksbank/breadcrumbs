@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { classifyDirection, createFeedbackService } from '@/feedback';
+import {
+    classifyDirection,
+    classifyDirectionWithHysteresis,
+    createFeedbackService,
+} from '@/feedback';
 
 describe('classifyDirection', () => {
     it('classifies 0° as straight ahead', () => {
@@ -1077,5 +1081,70 @@ describe('FeedbackService – direction throttle', () => {
         // announce() is independent and should still fire within throttle window
         service.announce('50 metres');
         expect(speakMock).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('classifyDirectionWithHysteresis', () => {
+    it('returns same as classifyDirection when previousDirection is null', () => {
+        expect(classifyDirectionWithHysteresis(0, null)).toBe('straight ahead');
+        expect(classifyDirectionWithHysteresis(90, null)).toBe('turn right');
+        expect(classifyDirectionWithHysteresis(-90, null)).toBe('turn left');
+        expect(classifyDirectionWithHysteresis(180, null)).toBe("you're going the wrong way");
+    });
+
+    it('stays straight when delta is at boundary (30°) with previous straight', () => {
+        expect(classifyDirectionWithHysteresis(30, 'straight ahead')).toBe('straight ahead');
+    });
+
+    it('stays straight when delta is within hysteresis band (35°)', () => {
+        // 35° is beyond 30° threshold but within 30+8=38° hysteresis band
+        expect(classifyDirectionWithHysteresis(35, 'straight ahead')).toBe('straight ahead');
+    });
+
+    it('switches to turn right when delta exceeds hysteresis band (39°)', () => {
+        expect(classifyDirectionWithHysteresis(39, 'straight ahead')).toBe('turn right');
+    });
+
+    it('stays turn right when delta drops back to 25° (inside hysteresis band)', () => {
+        // 25° is below 30° threshold but above 30-8=22°
+        expect(classifyDirectionWithHysteresis(25, 'turn right')).toBe('turn right');
+    });
+
+    it('switches from turn right to straight when delta drops to 20°', () => {
+        // 20° is below 30-8=22°
+        expect(classifyDirectionWithHysteresis(20, 'turn right')).toBe('straight ahead');
+    });
+
+    it('stays turn left when delta is -25° (inside hysteresis band)', () => {
+        expect(classifyDirectionWithHysteresis(-25, 'turn left')).toBe('turn left');
+    });
+
+    it('switches from turn left to straight when delta is -20°', () => {
+        expect(classifyDirectionWithHysteresis(-20, 'turn left')).toBe('straight ahead');
+    });
+
+    it('stays wrong way when delta is 145° (inside hysteresis band)', () => {
+        // 145° is below 150° threshold but above 150-8=142°
+        expect(classifyDirectionWithHysteresis(145, "you're going the wrong way")).toBe(
+            "you're going the wrong way"
+        );
+    });
+
+    it('switches from wrong way to turn right when delta drops to 140°', () => {
+        expect(classifyDirectionWithHysteresis(140, "you're going the wrong way")).toBe(
+            'turn right'
+        );
+    });
+
+    it('prevents oscillation at straight/right boundary', () => {
+        // Simulate oscillation: 29, 31, 29, 31 degrees
+        let dir = classifyDirectionWithHysteresis(29, null);
+        expect(dir).toBe('straight ahead');
+        dir = classifyDirectionWithHysteresis(31, dir);
+        expect(dir).toBe('straight ahead'); // hysteresis prevents switch
+        dir = classifyDirectionWithHysteresis(29, dir);
+        expect(dir).toBe('straight ahead');
+        dir = classifyDirectionWithHysteresis(31, dir);
+        expect(dir).toBe('straight ahead');
     });
 });

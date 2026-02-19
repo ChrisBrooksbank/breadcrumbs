@@ -40,6 +40,62 @@ export function classifyDirection(bearingDelta: number): Direction {
 }
 
 /**
+ * Hysteresis band width in degrees.
+ * Once classified, the delta must move beyond threshold ± HYSTERESIS_DEG
+ * before the classification changes.
+ */
+const HYSTERESIS_DEG = 8;
+
+/**
+ * Classify a bearing delta with hysteresis to prevent flickering at
+ * classification boundaries. Uses an 8° dead-zone band: once classified
+ * as e.g. "straight ahead" (±30°), delta must exceed ±38° to switch away,
+ * and must drop below ±22° to re-enter.
+ *
+ * @param bearingDelta - Target bearing minus compass heading
+ * @param previousDirection - The previous classification, or null on first call
+ * @returns The stable direction classification
+ */
+export function classifyDirectionWithHysteresis(
+    bearingDelta: number,
+    previousDirection: Direction | null
+): Direction {
+    // No previous state — use standard classifier
+    if (previousDirection === null) {
+        return classifyDirection(bearingDelta);
+    }
+
+    const delta = (((bearingDelta % 360) + 540) % 360) - 180;
+    const absDelta = Math.abs(delta);
+
+    // Check if the current delta still falls within the hysteresis band
+    // of the previous classification
+    switch (previousDirection) {
+        case 'straight ahead':
+            // Stay straight until delta exceeds 30 + 8 = 38°
+            if (absDelta <= 30 + HYSTERESIS_DEG) return 'straight ahead';
+            break;
+        case 'turn right':
+            // Stay turn right: must drop below 30 - 8 = 22° to go straight,
+            // or exceed 150 + 8 = 158° to go wrong way
+            if (delta > 30 - HYSTERESIS_DEG && delta <= 150 + HYSTERESIS_DEG) return 'turn right';
+            break;
+        case 'turn left':
+            // Mirror of turn right
+            if (delta < -(30 - HYSTERESIS_DEG) && delta >= -(150 + HYSTERESIS_DEG))
+                return 'turn left';
+            break;
+        case "you're going the wrong way":
+            // Stay wrong way until delta drops below 150 - 8 = 142°
+            if (absDelta > 150 - HYSTERESIS_DEG) return "you're going the wrong way";
+            break;
+    }
+
+    // Outside the hysteresis band — reclassify
+    return classifyDirection(bearingDelta);
+}
+
+/**
  * Distance thresholds in metres at which announcements are triggered.
  * Listed from largest to smallest.
  */

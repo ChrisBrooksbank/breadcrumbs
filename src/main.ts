@@ -11,8 +11,12 @@ import {
     clearSession,
     updateLastBreadcrumb,
 } from '@/storage';
-import { haversineMeters, bearingDegrees, remainingTrailDistance } from '@/geo';
-import { createNavigationService, createCompassService } from '@/navigation';
+import { haversineMeters, bearingDegrees, remainingTrailDistance, lookAheadPoint } from '@/geo';
+import {
+    createNavigationService,
+    createCompassService,
+    createPositionSmoother,
+} from '@/navigation';
 import { createWakeLockManager } from '@/wake-lock';
 import { createAudioKeepAlive } from '@/audio-keepalive';
 import { createShakeDetector } from '@/motion';
@@ -29,7 +33,9 @@ import {
     FONT_SIZES,
 } from '@/settings';
 import type { ThemeMode } from '@/settings';
-import { classifyDirection } from '@/feedback';
+import { classifyDirectionWithHysteresis } from '@/feedback';
+import type { Direction } from '@/feedback';
+import { createHeadingFusion } from '@/heading-fusion';
 import { LANDMARK_PRESETS } from '@/landmarks';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
@@ -452,9 +458,8 @@ function updateNavProgress(root: HTMLElement, current: number, total: number): v
     }
 }
 
-/** Map classifyDirection output to a simple display word. */
-function directionWord(bearingDelta: number): string {
-    const dir = classifyDirection(bearingDelta);
+/** Map a Direction to a simple display word. */
+function directionWord(dir: Direction): string {
     switch (dir) {
         case 'straight ahead':
             return 'STRAIGHT';
@@ -467,9 +472,8 @@ function directionWord(bearingDelta: number): string {
     }
 }
 
-/** Map classifyDirection output to a simple nav CSS modifier. */
-function directionClass(bearingDelta: number): string {
-    const dir = classifyDirection(bearingDelta);
+/** Map a Direction to a simple nav CSS modifier. */
+function directionClass(dir: Direction): string {
     switch (dir) {
         case 'straight ahead':
             return 'simple-nav--on-track';
@@ -481,13 +485,13 @@ function directionClass(bearingDelta: number): string {
     }
 }
 
-function updateSimpleDirection(root: HTMLElement, bearingDelta: number): void {
+function updateSimpleDirection(root: HTMLElement, dir: Direction): void {
     const dirEl = root.querySelector<HTMLElement>('#simple-direction');
     const navEl = root.querySelector<HTMLElement>('#simple-nav');
-    if (dirEl) dirEl.textContent = directionWord(bearingDelta);
+    if (dirEl) dirEl.textContent = directionWord(dir);
     if (navEl) {
         navEl.classList.remove('simple-nav--on-track', 'simple-nav--turn', 'simple-nav--wrong');
-        navEl.classList.add(directionClass(bearingDelta));
+        navEl.classList.add(directionClass(dir));
     }
 }
 
@@ -668,6 +672,13 @@ export function switchToNavigationView(
 
     const offCourseDetector = createOffCourseDetector();
 
+    // Direction reliability: position smoother, heading fusion, hysteresis state
+    const smoother = createPositionSmoother(3);
+    const fusion = createHeadingFusion();
+    let previousDirection: Direction | null = null;
+    let lastSimpleUpdateTime = 0;
+    const SIMPLE_THROTTLE_MS = 1000;
+
     // Trail renderer — initialised once breadcrumbs are loaded
     let trailRenderer: TrailRenderer | null = null;
 
@@ -684,12 +695,14 @@ export function switchToNavigationView(
 
     function refreshArrow(): void {
         const target = nav.targetBreadcrumb;
-        if (currentPos && target) {
-            bearingToBreadcrumb = bearingDegrees(currentPos, target);
+        // Use smoothed position for bearing calculation to reduce jitter
+        const posForBearing = smoother.smoothed ?? currentPos;
+        if (posForBearing && target) {
+            bearingToBreadcrumb = bearingDegrees(posForBearing, target);
         }
-        const compassHeading = compass.compassHeading;
-        if (bearingToBreadcrumb !== null && compassHeading !== null) {
-            const arrowDeg = (bearingToBreadcrumb - compassHeading + 360) % 360;
+        const heading = fusion.fusedHeading ?? compass.compassHeading;
+        if (bearingToBreadcrumb !== null && heading !== null) {
+            const arrowDeg = (bearingToBreadcrumb - heading + 360) % 360;
             updateNavArrow(root, arrowDeg);
         }
     }
@@ -699,16 +712,42 @@ export function switchToNavigationView(
         if (hint) hint.hidden = !compass.needsCalibration;
     }
 
-    compass.onHeadingChange = () => {
+    compass.onHeadingChange = (heading: number) => {
+        // Feed compass heading into fusion
+        fusion.updateCompass(heading);
+
         refreshArrow();
         refreshCalibrationHint();
         renderTrail();
-        if (bearingToBreadcrumb !== null && compass.compassHeading !== null) {
-            const delta = bearingToBreadcrumb - compass.compassHeading;
+
+        const fusedHeading = fusion.fusedHeading ?? compass.compassHeading;
+        if (bearingToBreadcrumb !== null && fusedHeading !== null) {
+            const delta = bearingToBreadcrumb - fusedHeading;
             feedback.vibrateAlignment(delta);
-            // Update simple mode direction display
+
+            // Update simple mode direction display with hysteresis + throttle + look-ahead
             if (getSimpleMode()) {
-                updateSimpleDirection(root, delta);
+                const now = Date.now();
+                if (now - lastSimpleUpdateTime >= SIMPLE_THROTTLE_MS) {
+                    lastSimpleUpdateTime = now;
+                    // Use look-ahead bearing for simple mode direction
+                    let simpleTarget = bearingToBreadcrumb;
+                    if (trailBreadcrumbs.length > 0) {
+                        const posForBearing = smoother.smoothed ?? currentPos;
+                        if (posForBearing) {
+                            const laPoint = lookAheadPoint(
+                                trailBreadcrumbs,
+                                nav.progress.currentIndex,
+                                30
+                            );
+                            simpleTarget = bearingDegrees(posForBearing, laPoint);
+                        }
+                    }
+                    const simpleDelta = simpleTarget - fusedHeading;
+                    const dir = classifyDirectionWithHysteresis(simpleDelta, previousDirection);
+                    previousDirection = dir;
+                    updateSimpleDirection(root, dir);
+                }
             }
         }
     };
@@ -771,6 +810,12 @@ export function switchToNavigationView(
             navGps.start(
                 (breadcrumb: Breadcrumb) => {
                     currentPos = breadcrumb;
+                    smoother.push(breadcrumb);
+
+                    // Feed GPS movement bearing into fusion for compass correction
+                    if (navGps.movementBearing !== null && navGps.estimatedSpeedMs !== null) {
+                        fusion.updateGps(navGps.movementBearing, navGps.estimatedSpeedMs);
+                    }
 
                     if (nav.progress.arrived) {
                         showNavArrived(root);
@@ -824,6 +869,7 @@ export function switchToNavigationView(
                         feedback.playConfirmationBeep();
                         feedback.resetDistanceAnnouncements();
                         offCourseDetector.reset();
+                        previousDirection = null; // reset hysteresis on breadcrumb advance
                         landmarkAnnouncedFar = false;
                         landmarkAnnouncedNear = false;
                         if (nav.progress.arrived) {
@@ -849,12 +895,9 @@ export function switchToNavigationView(
                         const p = nav.progress;
                         updateNavProgress(root, p.currentIndex + 1, p.total);
                         // Check for sustained off-course heading on GPS updates
-                        if (bearingToBreadcrumb !== null && compass.compassHeading !== null) {
-                            if (
-                                offCourseDetector.check(
-                                    bearingToBreadcrumb - compass.compassHeading
-                                )
-                            ) {
+                        const headingForCheck = fusion.fusedHeading ?? compass.compassHeading;
+                        if (bearingToBreadcrumb !== null && headingForCheck !== null) {
+                            if (offCourseDetector.check(bearingToBreadcrumb - headingForCheck)) {
                                 feedback.speak("you're going the wrong way");
                             }
                         }

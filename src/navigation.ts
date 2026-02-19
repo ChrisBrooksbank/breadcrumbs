@@ -126,6 +126,62 @@ export function createCompassService(): CompassService {
     };
 }
 
+export interface PositionSmoother {
+    /** Feed a new GPS fix into the smoother. */
+    push(pos: Breadcrumb): void;
+    /** The smoothed position (weighted moving average), or null if no fixes yet. */
+    readonly smoothed: Breadcrumb | null;
+    /** Reset the buffer. */
+    reset(): void;
+}
+
+/**
+ * Weighted moving average of the last N GPS positions.
+ * More recent fixes are weighted higher (linearly: weight = index + 1).
+ * Used for bearing calculation only; raw position kept for distance/advance.
+ */
+export function createPositionSmoother(bufferSize = 3): PositionSmoother {
+    const buffer: Breadcrumb[] = [];
+
+    function push(pos: Breadcrumb): void {
+        buffer.push(pos);
+        if (buffer.length > bufferSize) buffer.shift();
+    }
+
+    function computeSmoothed(): Breadcrumb | null {
+        if (buffer.length === 0) return null;
+        if (buffer.length === 1) return buffer[0];
+
+        let totalWeight = 0;
+        let lat = 0;
+        let lng = 0;
+        for (let i = 0; i < buffer.length; i++) {
+            const weight = i + 1; // newer = higher weight
+            lat += buffer[i].lat * weight;
+            lng += buffer[i].lng * weight;
+            totalWeight += weight;
+        }
+        return {
+            lat: lat / totalWeight,
+            lng: lng / totalWeight,
+            accuracy: buffer[buffer.length - 1].accuracy,
+            timestamp: buffer[buffer.length - 1].timestamp,
+        };
+    }
+
+    function reset(): void {
+        buffer.length = 0;
+    }
+
+    return {
+        push,
+        get smoothed() {
+            return computeSmoothed();
+        },
+        reset,
+    };
+}
+
 export function createNavigationService(): NavigationService {
     let trail: Breadcrumb[] = [];
     let currentIndex = 0;

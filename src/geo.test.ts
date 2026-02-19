@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bearingDegrees, haversineMeters, pointToSegmentMeters } from '@/geo';
+import { bearingDegrees, haversineMeters, lookAheadPoint, pointToSegmentMeters } from '@/geo';
 import type { Breadcrumb } from '@/types';
 
 function crumb(lat: number, lng: number): Breadcrumb {
@@ -153,5 +153,58 @@ describe('pointToSegmentMeters', () => {
         const point = crumb(51.5005, 0.000504);
         const dist = pointToSegmentMeters(point, a, b);
         expect(dist).toBeCloseTo(35, 0);
+    });
+});
+
+describe('lookAheadPoint', () => {
+    // Trail going due north: each point ~111m apart (0.001° lat ≈ 111m)
+    const trail = [
+        crumb(0, 0),
+        crumb(0.001, 0), // ~111m north
+        crumb(0.002, 0), // ~222m north
+        crumb(0.003, 0), // ~333m north
+    ];
+
+    it('throws when trail is empty', () => {
+        expect(() => lookAheadPoint([], 0, 30)).toThrow();
+    });
+
+    it('returns last point when startIndex is at end of trail', () => {
+        const result = lookAheadPoint(trail, 3, 30);
+        expect(result).toEqual(trail[3]);
+    });
+
+    it('returns last point when trail is shorter than requested distance', () => {
+        const result = lookAheadPoint(trail, 0, 99999);
+        expect(result).toEqual(trail[3]);
+    });
+
+    it('interpolates within first segment for short look-ahead', () => {
+        // First segment is ~111m. Look ahead 50m from index 0.
+        const result = lookAheadPoint(trail, 0, 50);
+        // t ≈ 50/111 ≈ 0.45
+        expect(result.lat).toBeGreaterThan(0);
+        expect(result.lat).toBeLessThan(0.001);
+        expect(result.lng).toBeCloseTo(0, 5);
+    });
+
+    it('spans multiple segments for longer look-ahead', () => {
+        // Look ahead 150m from index 0: should be ~39m into second segment
+        // First segment ~111m, so remaining ~39m into second segment
+        const result = lookAheadPoint(trail, 0, 150);
+        expect(result.lat).toBeGreaterThan(0.001);
+        expect(result.lat).toBeLessThan(0.002);
+    });
+
+    it('returns last point when startIndex is at trail.length - 1', () => {
+        const result = lookAheadPoint(trail, 3, 30);
+        expect(result).toEqual(trail[3]);
+    });
+
+    it('works with default distance parameter (30m)', () => {
+        const result = lookAheadPoint(trail, 0);
+        // Should interpolate ~30m into the first ~111m segment
+        expect(result.lat).toBeGreaterThan(0);
+        expect(result.lat).toBeLessThan(0.001);
     });
 });
