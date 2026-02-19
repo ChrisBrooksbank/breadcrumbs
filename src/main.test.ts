@@ -32,16 +32,14 @@ describe('App Shell', () => {
         };
     });
 
-    it('renders a header with the app title', () => {
+    it('renders without a header (compact layout)', () => {
         const header = root.querySelector('header');
-        expect(header).not.toBeNull();
-        expect(header?.querySelector('h1')?.textContent).toBe('Breadcrumbs');
+        expect(header).toBeNull();
     });
 
     it('renders the recording status card', () => {
         const card = root.querySelector('#recording-status-card');
         expect(card).not.toBeNull();
-        expect(card?.querySelector('h2')?.textContent).toBe('Recording Status');
     });
 
     it('renders the status badge', () => {
@@ -56,10 +54,10 @@ describe('App Shell', () => {
         expect(btn?.textContent?.trim()).toBe('Take me back');
     });
 
-    it('renders "Save this route" button', () => {
+    it('renders "Save route" button', () => {
         const btn = root.querySelector('#btn-save-route') as HTMLButtonElement | null;
         expect(btn).not.toBeNull();
-        expect(btn?.textContent?.trim()).toBe('Save this route');
+        expect(btn?.textContent?.trim()).toBe('Save route');
     });
 
     it('"Take me back" button is disabled by default', () => {
@@ -79,9 +77,9 @@ describe('App Shell', () => {
         expect(saveRoute?.getAttribute('aria-label')).toBeTruthy();
     });
 
-    it('renders a footer', () => {
+    it('does not render a footer (compact layout)', () => {
         const footer = root.querySelector('footer');
-        expect(footer).not.toBeNull();
+        expect(footer).toBeNull();
     });
 
     it('actions group has role="group" for accessibility', () => {
@@ -412,10 +410,9 @@ describe('mountNavigationView', () => {
         };
     });
 
-    it('renders a header with the app title', () => {
+    it('renders without a header (compact layout)', () => {
         const header = root.querySelector('header');
-        expect(header).not.toBeNull();
-        expect(header?.querySelector('h1')?.textContent).toBe('Breadcrumbs');
+        expect(header).toBeNull();
     });
 
     it('renders the compass arrow SVG', () => {
@@ -501,6 +498,8 @@ describe('switchToNavigationView', () => {
         root.id = 'app';
         document.body.appendChild(root);
         return () => {
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+            _resetModalOpen();
             document.body.removeChild(root);
         };
     });
@@ -539,6 +538,11 @@ describe('switchToNavigationView', () => {
         const stopBtn = root.querySelector<HTMLButtonElement>('#btn-stop-navigation');
         stopBtn?.click();
 
+        // Confirm dialog should appear
+        const confirmBtn = document.querySelector<HTMLButtonElement>('#btn-confirm-yes');
+        expect(confirmBtn).not.toBeNull();
+        confirmBtn?.click();
+
         expect(root.querySelector('#btn-take-me-back')).not.toBeNull();
         vi.unstubAllGlobals();
     });
@@ -566,12 +570,14 @@ describe('"Take me back" button switches to navigation view', () => {
         vi.stubGlobal('isSecureContext', true);
 
         return () => {
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+            _resetModalOpen();
             document.body.removeChild(root);
             vi.unstubAllGlobals();
         };
     });
 
-    it('clicking "Take me back" after first breadcrumb shows navigation view', async () => {
+    it('clicking "Take me back" after first breadcrumb shows confirmation then navigation view', async () => {
         startRecording(root);
 
         watchPositionCallback({
@@ -584,6 +590,13 @@ describe('"Take me back" button switches to navigation view', () => {
         const takeBackBtn = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
         expect(takeBackBtn?.disabled).toBe(false);
         takeBackBtn?.click();
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // Confirm dialog should appear
+        const confirmBtn = document.querySelector<HTMLButtonElement>('#btn-confirm-yes');
+        expect(confirmBtn).not.toBeNull();
+        confirmBtn?.click();
 
         await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -761,6 +774,12 @@ describe('switchToNavigationView – live navigation', () => {
 });
 
 describe('openSaveModal', () => {
+    beforeEach(() => {
+        // Ensure clean modal state
+        document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+        _resetModalOpen();
+    });
+
     afterEach(() => {
         // Clean up any lingering modals
         document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
@@ -1009,10 +1028,10 @@ describe('mountSavedRoutesView', () => {
         };
     });
 
-    it('renders a header with the app title', () => {
+    it('renders without a header (compact layout)', () => {
         mountSavedRoutesView(root, onBack);
-        const h1 = root.querySelector('header h1');
-        expect(h1?.textContent).toBe('Breadcrumbs');
+        const header = root.querySelector('header');
+        expect(header).toBeNull();
     });
 
     it('renders a back button', () => {
@@ -1586,7 +1605,7 @@ describe('App Shell has Mark landmark button', () => {
     it('renders the "Mark landmark" button', () => {
         const btn = root.querySelector('#btn-mark-landmark');
         expect(btn).not.toBeNull();
-        expect(btn?.textContent?.trim()).toBe('Mark landmark');
+        expect(btn?.textContent?.trim()).toBe('Landmark');
     });
 
     it('"Mark landmark" button is disabled by default', () => {

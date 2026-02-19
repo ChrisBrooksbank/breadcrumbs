@@ -139,10 +139,18 @@ body {
         Roboto,
         sans-serif;
     min-height: 100vh;
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
     background: var(--color-bg);
     color: var(--color-text);
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh;
 }
 
 header {
@@ -160,13 +168,71 @@ header h1 {
 
 main {
     flex: 1;
-    padding: 1.5rem;
+    padding: 1rem;
     max-width: 600px;
     margin: 0 auto;
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.75rem;
+}
+
+/* ── Compact recording layout (no header/footer, fits viewport) ── */
+
+.recording-main {
+    flex: 1;
+    padding: 1rem;
+    max-width: 600px;
+    margin: 0 auto;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.75rem;
+}
+
+.recording-compact {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: var(--color-surface);
+    border-radius: 12px;
+    box-shadow: 0 2px 8px var(--color-surface-shadow);
+}
+
+.recording-compact__status {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.recording-compact__stats {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    justify-content: center;
+}
+
+.recording-compact__time {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--color-stat-value);
+    line-height: 1;
+}
+
+.recording-compact__sep {
+    font-size: 1.5rem;
+    color: var(--color-text-muted);
+}
+
+.recording-compact__dist {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
 }
 
 .card {
@@ -187,7 +253,7 @@ main {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.5rem 1rem;
+    padding: 0.375rem 0.875rem;
     border-radius: 9999px;
     font-size: 1rem;
     font-weight: 600;
@@ -223,7 +289,6 @@ main {
     font-weight: 600;
     background: var(--color-status-stationary-bg);
     color: var(--color-status-stationary-text);
-    margin-top: 0.5rem;
 }
 
 .status-dot {
@@ -254,6 +319,15 @@ main {
     gap: 0.75rem;
 }
 
+.actions-row {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.actions-row > .btn {
+    flex: 1;
+}
+
 .btn {
     display: flex;
     align-items: center;
@@ -271,6 +345,12 @@ main {
         transform 0.1s ease;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
+}
+
+.btn--large {
+    min-height: 72px;
+    font-size: 1.375rem;
+    font-weight: 700;
 }
 
 .btn:active {
@@ -318,7 +398,7 @@ footer {
     align-items: center;
     gap: 0.75rem;
     text-align: center;
-    padding: 1.25rem;
+    padding: 0.75rem;
     color: var(--color-text-muted);
     font-size: 0.875rem;
 }
@@ -330,21 +410,34 @@ footer .btn {
 
 /* ── Navigation view ── */
 
+.nav-main {
+    flex: 1;
+    padding: 0.5rem;
+    max-width: 600px;
+    margin: 0 auto;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 0;
+}
+
 .nav-view {
     position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.5rem;
-    padding: 1rem 0;
+    flex: 1;
+    min-height: 0;
 }
 
 .nav-primary {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.5rem;
     width: 100%;
+    flex: 1;
+    min-height: 0;
 }
 
 .nav-compass-corner {
@@ -415,7 +508,8 @@ footer .btn {
 .nav-trail-container {
     position: relative;
     width: 100%;
-    aspect-ratio: 1 / 1;
+    flex: 1;
+    min-height: 0;
     background: var(--color-surface);
     border-radius: 12px;
     overflow: hidden;
@@ -458,6 +552,31 @@ footer .btn {
     font-size: 1rem;
     color: rgba(255, 255, 255, 0.9);
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* Navigation footer with compact button layout */
+.nav-footer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+}
+
+.nav-footer__row {
+    display: flex;
+    gap: 0.5rem;
+    width: 100%;
+    max-width: 600px;
+}
+
+.nav-footer__row .btn {
+    flex: 1;
+}
+
+.nav-footer > .btn {
+    width: 100%;
+    max-width: 600px;
 }
 
 .recording-stats {
@@ -547,6 +666,14 @@ footer .btn {
     color: var(--color-modal-error);
 }
 
+/* ── Confirm dialog ── */
+
+.confirm-dialog-text {
+    color: var(--color-text);
+    font-size: 1.125rem;
+    line-height: 1.5;
+}
+
 /* ── Saved routes screen ── */
 
 .routes-screen {
@@ -623,7 +750,7 @@ footer .btn {
     align-items: center;
     justify-content: center;
     gap: 1rem;
-    padding: 0.5rem 1rem;
+    padding: 0.375rem 0.75rem;
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-border-light);
     flex-wrap: wrap;
@@ -782,6 +909,44 @@ footer .btn {
     font-weight: 600;
 }
 
+/* ── Screen lock overlay ── */
+
+.screen-lock-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+.screen-lock__content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    pointer-events: none;
+}
+
+.screen-lock__icon {
+    font-size: 3rem;
+    line-height: 1;
+}
+
+.screen-lock__text {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: white;
+}
+
+.screen-lock__hint {
+    font-size: 1rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+
 /* ── Simple Mode ── */
 
 /* Status bar at top of simple recording screen */
@@ -810,7 +975,7 @@ footer .btn {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 1rem;
+    padding: 0.75rem;
     gap: 0.75rem;
 }
 
@@ -834,11 +999,11 @@ footer .btn {
     color: var(--color-text-muted);
 }
 
-/* Giant "TAKE ME BACK" button */
+/* "TAKE ME BACK" button — large but not overwhelming */
 .simple-take-me-back {
     width: 90%;
-    min-height: 60vh;
-    max-height: 60vh;
+    flex: 1;
+    max-height: 40vh;
     border: none;
     border-radius: 20px;
     background: var(--color-primary);
@@ -869,22 +1034,16 @@ footer .btn {
     outline-offset: 4px;
 }
 
-/* More button */
-.simple-more-btn {
-    position: fixed;
-    bottom: 1rem;
-    right: 1rem;
-    min-width: 48px;
+/* Bottom row in simple mode (More + Saved routes side by side) */
+.simple-bottom-row {
+    display: flex;
+    gap: 0.75rem;
+    width: 90%;
+}
+
+.simple-bottom-row .btn {
+    flex: 1;
     min-height: 48px;
-    padding: 0.5rem 1rem;
-    border: 2px solid var(--color-border);
-    border-radius: 10px;
-    background: var(--color-secondary-bg);
-    color: var(--color-secondary-text);
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    z-index: 10;
 }
 
 .simple-more-panel {
