@@ -120,6 +120,27 @@ describe('NavigationService – proximity detection and index advancement', () =
         expect(advanced).toBe(false);
     });
 
+    it('uses GPS accuracy as part of the arrival zone', () => {
+        const nearWithUncertainGps = makeBreadcrumb(51.50046, -0.1, 30); // ~29m from target
+        const advanced = service.advanceIfClose(nearWithUncertainGps, 15);
+        expect(advanced).toBe(true);
+    });
+
+    it('skips a missed breadcrumb when the user is already near a later one', () => {
+        const spacedBreadcrumbs = [
+            makeBreadcrumb(51.5, -0.1),
+            makeBreadcrumb(51.5005, -0.1),
+            makeBreadcrumb(51.501, -0.1),
+        ];
+        service.load(spacedBreadcrumbs);
+        // Current target is spacedBreadcrumbs[2]. Being near spacedBreadcrumbs[1] means the
+        // user has effectively passed the noisy target and should not be stranded.
+        const nearNextTarget = makeBreadcrumb(51.5005, -0.1, 5);
+        const advanced = service.advanceIfClose(nearNextTarget, 15);
+        expect(advanced).toBe(true);
+        expect(service.targetBreadcrumb).toEqual(spacedBreadcrumbs[0]);
+    });
+
     it('advances through all breadcrumbs sequentially', () => {
         // Target is breadcrumbs[2], then [1], then [0]
         expect(service.targetBreadcrumb).toEqual(breadcrumbs[2]);

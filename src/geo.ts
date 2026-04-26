@@ -86,6 +86,15 @@ export function remainingTrailDistance(
     return total;
 }
 
+/** Sum the distance through all consecutive breadcrumbs in a trail. */
+export function trailDistanceMeters(trail: Breadcrumb[]): number {
+    let total = 0;
+    for (let i = 1; i < trail.length; i++) {
+        total += haversineMeters(trail[i - 1], trail[i]);
+    }
+    return total;
+}
+
 /**
  * Find a look-ahead point along the trail polyline, a given distance ahead
  * from startIndex. Interpolates between breadcrumbs when the distance falls

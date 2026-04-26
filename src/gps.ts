@@ -76,6 +76,8 @@ export interface GeolocationService {
     onStationaryChange: ((stationary: boolean) => void) | null;
     /** Called when suspension state changes. */
     onSuspendedChange: ((suspended: boolean) => void) | null;
+    /** Called when a GPS fix is too inaccurate to trust for breadcrumb recording. */
+    onPoorAccuracy: ((accuracy: number) => void) | null;
     /** Switch enableHighAccuracy on the fly (restarts the GPS watcher). */
     setHighAccuracy(value: boolean): void;
 }
@@ -109,6 +111,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
     let suspended = false;
     let onStationaryChange: ((stationary: boolean) => void) | null = null;
     let onSuspendedChange: ((suspended: boolean) => void) | null = null;
+    let onPoorAccuracy: ((accuracy: number) => void) | null = null;
     let savedOnBreadcrumb: BreadcrumbCallback | null = null;
     let savedOnError: ErrorCallback | undefined;
 
@@ -210,7 +213,10 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                 }
                 // --- End stationary detection ---
 
-                if (accuracy > MAX_ACCURACY_METERS) return;
+                if (accuracy > MAX_ACCURACY_METERS) {
+                    onPoorAccuracy?.(accuracy);
+                    return;
+                }
 
                 const candidate: Breadcrumb = {
                     lat: latitude,
@@ -317,6 +323,12 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
         },
         set onSuspendedChange(cb: ((suspended: boolean) => void) | null) {
             onSuspendedChange = cb;
+        },
+        get onPoorAccuracy() {
+            return onPoorAccuracy;
+        },
+        set onPoorAccuracy(cb: ((accuracy: number) => void) | null) {
+            onPoorAccuracy = cb;
         },
     };
 }

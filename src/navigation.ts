@@ -2,6 +2,7 @@ import type { Breadcrumb } from '@/types';
 import { haversineMeters, pointToSegmentMeters } from '@/geo';
 
 const DEFAULT_PROXIMITY_THRESHOLD_METERS = 15;
+const MAX_ACCURACY_ASSIST_METERS = 35;
 const OFF_ROUTE_THRESHOLD_METERS = 30;
 const OFF_ROUTE_DEBOUNCE_FIXES = 3;
 
@@ -39,6 +40,11 @@ export interface NavigationService {
     load(breadcrumbs: Breadcrumb[]): void;
     loadForward(breadcrumbs: Breadcrumb[]): void;
     advanceIfClose(pos: Breadcrumb, threshold?: number): boolean;
+    proximityThresholdMeters(
+        pos: Breadcrumb,
+        target?: Breadcrumb | null,
+        threshold?: number
+    ): number;
     distanceToTrailMeters(pos: Breadcrumb): number;
     readonly progress: NavigationProgress;
     readonly targetBreadcrumb: Breadcrumb | null;
@@ -212,14 +218,41 @@ export function createNavigationService(): NavigationService {
         if (trail.length === 0 || currentIndex >= trail.length) return false;
 
         const target = trail[currentIndex];
+        const effectiveThreshold = proximityThresholdMeters(pos, target, threshold);
         const distance = haversineMeters(pos, target);
 
-        if (distance <= threshold) {
+        if (distance <= effectiveThreshold) {
             currentIndex++;
             return true;
         }
 
+        // GPS can easily make a user miss a single breadcrumb. If they are close to
+        // a future point, advance past the missed point instead of making them chase it.
+        for (let i = currentIndex + 1; i < trail.length; i++) {
+            const futureTarget = trail[i];
+            const futureThreshold = proximityThresholdMeters(pos, futureTarget, threshold);
+            if (haversineMeters(pos, futureTarget) <= futureThreshold) {
+                currentIndex = i + 1;
+                return true;
+            }
+        }
+
         return false;
+    }
+
+    function proximityThresholdMeters(
+        pos: Breadcrumb,
+        target: Breadcrumb | null = null,
+        threshold = DEFAULT_PROXIMITY_THRESHOLD_METERS
+    ): number {
+        const posAccuracy = Number.isFinite(pos.accuracy) ? pos.accuracy : 0;
+        const targetAccuracy =
+            target && Number.isFinite(target.accuracy) ? Math.min(target.accuracy, 15) : 0;
+        return Math.max(
+            threshold,
+            Math.min(posAccuracy, MAX_ACCURACY_ASSIST_METERS),
+            targetAccuracy
+        );
     }
 
     /**
@@ -269,6 +302,7 @@ export function createNavigationService(): NavigationService {
             }
             return advanced;
         },
+        proximityThresholdMeters,
         distanceToTrailMeters,
         get progress(): NavigationProgress {
             return {

@@ -11,7 +11,13 @@ import {
     clearSession,
     updateLastBreadcrumb,
 } from '@/storage';
-import { haversineMeters, bearingDegrees, remainingTrailDistance, lookAheadPoint } from '@/geo';
+import {
+    haversineMeters,
+    bearingDegrees,
+    remainingTrailDistance,
+    lookAheadPoint,
+    trailDistanceMeters,
+} from '@/geo';
 import {
     createNavigationService,
     createCompassService,
@@ -329,6 +335,22 @@ function setStatusRequesting(root: HTMLElement): void {
     }
 }
 
+function setStatusGpsWeak(root: HTMLElement): void {
+    const badge = root.querySelector('#status-badge');
+    const statusText = root.querySelector('#status-text');
+    if (badge) {
+        badge.classList.remove(
+            'status-badge--idle',
+            'status-badge--recording',
+            'status-badge--error'
+        );
+        badge.classList.add('status-badge--requesting');
+    }
+    if (statusText) {
+        statusText.textContent = 'GPS signal is weak. Move toward open sky if you can.';
+    }
+}
+
 function setStatusError(root: HTMLElement, message: string): void {
     const badge = root.querySelector('#status-badge');
     const statusText = root.querySelector('#status-text');
@@ -503,14 +525,14 @@ function updateSimpleDirection(root: HTMLElement, dir: Direction): void {
 
 function showNavArrived(root: HTMLElement): void {
     const el = root.querySelector('#nav-progress-text');
-    if (el) el.textContent = "You've arrived!";
+    if (el) el.textContent = "You're near your start point.";
     const distanceEl = root.querySelector('#nav-distance-value');
     if (distanceEl) distanceEl.textContent = '0 m';
     const arrow = root.querySelector<SVGElement>('#nav-compass-arrow');
     if (arrow) arrow.style.opacity = '0.3';
     // Simple mode: show arrived state
     const dirEl = root.querySelector<HTMLElement>('#simple-direction');
-    if (dirEl) dirEl.textContent = 'ARRIVED!';
+    if (dirEl) dirEl.textContent = 'ARRIVED';
     const navEl = root.querySelector<HTMLElement>('#simple-nav');
     if (navEl) {
         navEl.classList.remove('simple-nav--turn', 'simple-nav--wrong');
@@ -702,6 +724,7 @@ export function switchToNavigationView(
     // Direction reliability: position smoother, heading fusion, hysteresis state
     const smoother = createPositionSmoother(3);
     const fusion = createHeadingFusion();
+    const navGps = createGeolocationService({ disableMotionSuspension: true });
     let previousDirection: Direction | null = null;
     let lastSimpleUpdateTime = 0;
     const SIMPLE_THROTTLE_MS = 1000;
@@ -732,7 +755,7 @@ export function switchToNavigationView(
                 bearingToBreadcrumb = bearingDegrees(posForBearing, bearingTarget);
             }
         }
-        const heading = fusion.fusedHeading ?? compass.compassHeading;
+        const heading = fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
         if (bearingToBreadcrumb !== null && heading !== null) {
             const rawDeg = (bearingToBreadcrumb - heading + 360) % 360;
 
@@ -768,7 +791,8 @@ export function switchToNavigationView(
         refreshCalibrationHint();
         renderTrail();
 
-        const fusedHeading = fusion.fusedHeading ?? compass.compassHeading;
+        const fusedHeading =
+            fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
         if (bearingToBreadcrumb !== null && fusedHeading !== null) {
             const delta = bearingToBreadcrumb - fusedHeading;
             feedback.vibrateAlignment(delta);
@@ -799,8 +823,6 @@ export function switchToNavigationView(
             }
         }
     };
-
-    const navGps = createGeolocationService({ disableMotionSuspension: true });
 
     const loadBreadcrumbs: Promise<Breadcrumb[]> = breadcrumbsOverride
         ? Promise.resolve(breadcrumbsOverride)
@@ -947,7 +969,8 @@ export function switchToNavigationView(
                         const p = nav.progress;
                         updateNavProgress(root, p.currentIndex + 1, p.total);
                         // Check for sustained off-course heading on GPS updates
-                        const headingForCheck = fusion.fusedHeading ?? compass.compassHeading;
+                        const headingForCheck =
+                            fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
                         if (bearingToBreadcrumb !== null && headingForCheck !== null) {
                             if (offCourseDetector.check(bearingToBreadcrumb - headingForCheck)) {
                                 feedback.speak("you're going the wrong way");
@@ -956,6 +979,24 @@ export function switchToNavigationView(
                     }
 
                     refreshArrow();
+                    const headingForSimple =
+                        fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
+                    if (
+                        getSimpleMode() &&
+                        bearingToBreadcrumb !== null &&
+                        headingForSimple !== null
+                    ) {
+                        const now = Date.now();
+                        if (now - lastSimpleUpdateTime >= SIMPLE_THROTTLE_MS) {
+                            lastSimpleUpdateTime = now;
+                            const dir = classifyDirectionWithHysteresis(
+                                bearingToBreadcrumb - headingForSimple,
+                                previousDirection
+                            );
+                            previousDirection = dir;
+                            updateSimpleDirection(root, dir);
+                        }
+                    }
                     renderTrail();
                 },
                 () => {
@@ -1630,6 +1671,8 @@ export function startRecording(root: HTMLElement): void {
     let startTime: number | null = null;
     let timerInterval: ReturnType<typeof setInterval> | null = null;
     let screenLock: { destroy: () => void } | null = null;
+    let restoredExistingSession = false;
+    let recordingActionsWired = false;
 
     // Wire simple mode "More..." toggle
     const moreBtn = root.querySelector<HTMLButtonElement>('#btn-simple-more');
@@ -1654,6 +1697,88 @@ export function startRecording(root: HTMLElement): void {
         }
     }
 
+    function ensureRecordingActionsWired(): void {
+        if (recordingActionsWired) return;
+        recordingActionsWired = true;
+
+        const markBtn = root.querySelector<HTMLButtonElement>('#btn-mark-landmark');
+        if (markBtn) {
+            markBtn.addEventListener('click', () => {
+                openLandmarkPicker((label: string) => {
+                    updateLastBreadcrumb(b => ({ ...b, label })).catch(() => {
+                        // Silent fail — breadcrumb label not critical
+                    });
+                });
+            });
+        }
+
+        gps.onStationaryChange = (isStationary: boolean) => {
+            updateStationaryBadge(root, isStationary, gps.isSuspended);
+        };
+
+        gps.onSuspendedChange = (isSuspended: boolean) => {
+            updateStationaryBadge(root, gps.isStationary, isSuspended);
+        };
+
+        const takeBackBtn = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
+        if (takeBackBtn) {
+            takeBackBtn.addEventListener('click', () => {
+                openConfirmDialog(
+                    'Go back now?',
+                    'This will stop your walk and guide you back near where you started.',
+                    'Take me back',
+                    () => {
+                        cleanupRecording();
+                        switchToNavigationView(root);
+                    },
+                    { delay: 1500 }
+                );
+            });
+        }
+
+        const saveBtn = root.querySelector<HTMLButtonElement>('#btn-save-route');
+        if (saveBtn) {
+            saveBtn.addEventListener('click', () => {
+                const onSaved = () => {
+                    cleanupRecording();
+                    mountAppShell(root);
+                    startRecording(root);
+                };
+                getSession()
+                    .then(session => {
+                        openSaveModal(session?.breadcrumbs ?? [], totalMeters, onSaved);
+                    })
+                    .catch(() => {
+                        openSaveModal([], totalMeters, onSaved);
+                    });
+            });
+        }
+    }
+
+    getSession()
+        .then(session => {
+            if (!session || session.breadcrumbs.length === 0) return;
+            restoredExistingSession = true;
+            breadcrumbCount = session.breadcrumbs.length;
+            totalMeters = trailDistanceMeters(session.breadcrumbs);
+            lastBreadcrumb = session.breadcrumbs[session.breadcrumbs.length - 1];
+            startTime = session.startedAt;
+            setStatusRecording(root);
+            ensureRecordingActionsWired();
+            enableActionButtons(root);
+            updateStats(
+                root,
+                Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000)),
+                totalMeters
+            );
+            if (!screenLock) {
+                screenLock = createScreenLock(root);
+            }
+        })
+        .catch(() => {
+            // A failed restore should not block a fresh recording.
+        });
+
     const viewRoutesBtn = root.querySelector<HTMLButtonElement>('#btn-view-routes');
     if (viewRoutesBtn) {
         viewRoutesBtn.addEventListener('click', () => {
@@ -1664,6 +1789,14 @@ export function startRecording(root: HTMLElement): void {
             });
         });
     }
+
+    gps.onPoorAccuracy = () => {
+        if (breadcrumbCount === 0) {
+            gotResponse = true;
+            clearTimeout(requestTimeout);
+            setStatusGpsWeak(root);
+        }
+    };
 
     gps.start(
         async (breadcrumb: Breadcrumb) => {
@@ -1686,70 +1819,22 @@ export function startRecording(root: HTMLElement): void {
 
             updateStationaryBadge(root, gps.isStationary, gps.isSuspended);
 
-            if (breadcrumbCount === 1) {
+            if (breadcrumbCount === 1 || restoredExistingSession) {
+                const isFirstRenderForRestoredSession = restoredExistingSession;
+                restoredExistingSession = false;
                 setStatusRecording(root);
                 enableActionButtons(root);
 
                 // Activate screen lock to prevent accidental pocket presses
-                screenLock = createScreenLock(root);
-
-                // Wire landmark button
-                const markBtn = root.querySelector<HTMLButtonElement>('#btn-mark-landmark');
-                if (markBtn) {
-                    markBtn.addEventListener('click', () => {
-                        openLandmarkPicker((label: string) => {
-                            updateLastBreadcrumb(b => ({ ...b, label })).catch(() => {
-                                // Silent fail — breadcrumb label not critical
-                            });
-                        });
-                    });
+                if (!screenLock) {
+                    screenLock = createScreenLock(root);
                 }
 
-                // Wire stationary badge
-                gps.onStationaryChange = (isStationary: boolean) => {
-                    updateStationaryBadge(root, isStationary, gps.isSuspended);
-                };
+                ensureRecordingActionsWired();
 
-                // Wire suspension badge
-                gps.onSuspendedChange = (isSuspended: boolean) => {
-                    updateStationaryBadge(root, gps.isStationary, isSuspended);
-                };
-
-                const takeBackBtn = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
-                if (takeBackBtn) {
-                    takeBackBtn.addEventListener('click', () => {
-                        openConfirmDialog(
-                            'Go back now?',
-                            'This will stop your walk and guide you back to where you started.',
-                            'Take me back',
-                            () => {
-                                cleanupRecording();
-                                switchToNavigationView(root);
-                            },
-                            { delay: 1500 }
-                        );
-                    });
+                if (!startTime) {
+                    startTime = isFirstRenderForRestoredSession ? breadcrumb.timestamp : Date.now();
                 }
-
-                const saveBtn = root.querySelector<HTMLButtonElement>('#btn-save-route');
-                if (saveBtn) {
-                    saveBtn.addEventListener('click', () => {
-                        const onSaved = () => {
-                            cleanupRecording();
-                            mountAppShell(root);
-                            startRecording(root);
-                        };
-                        getSession()
-                            .then(session => {
-                                openSaveModal(session?.breadcrumbs ?? [], totalMeters, onSaved);
-                            })
-                            .catch(() => {
-                                openSaveModal([], totalMeters, onSaved);
-                            });
-                    });
-                }
-
-                startTime = Date.now();
                 timerInterval = setInterval(() => {
                     const elapsedSeconds = Math.floor(
                         (Date.now() - (startTime ?? Date.now())) / 1000
@@ -1789,7 +1874,7 @@ const appRoot = document.getElementById('app');
 if (appRoot) {
     initSettings();
     mountAppShell(appRoot);
-    clearSession().then(() => startRecording(appRoot));
+    startRecording(appRoot);
 
     // Delegated button tap feedback for elderly users —
     // provides haptic + audio confirmation that a tap registered

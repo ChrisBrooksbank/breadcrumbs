@@ -24,7 +24,8 @@ import { setFontSize, FONT_SIZES } from './settings';
 describe('App Shell', () => {
     let root: HTMLElement;
 
-    beforeEach(() => {
+    beforeEach(async () => {
+        await clearSession();
         root = document.createElement('div');
         root.id = 'app';
         document.body.appendChild(root);
@@ -95,7 +96,8 @@ describe('startRecording', () => {
     let watchPositionCallback: PositionCallback;
     let watchErrorCallback: PositionErrorCallback | undefined;
 
-    beforeEach(() => {
+    beforeEach(async () => {
+        await clearSession();
         root = document.createElement('div');
         root.id = 'app';
         document.body.appendChild(root);
@@ -233,6 +235,31 @@ describe('startRecording', () => {
         const statusText = root.querySelector('#status-text');
         expect(badge?.classList.contains('status-badge--requesting')).toBe(true);
         expect(statusText?.textContent).toContain('Requesting location');
+    });
+
+    it('restores an existing safety trail instead of starting from zero', async () => {
+        await clearSession();
+        await appendBreadcrumb({
+            lat: 51.5,
+            lng: -0.1,
+            accuracy: 5,
+            timestamp: Date.now() - 60_000,
+        });
+        await appendBreadcrumb({
+            lat: 51.5001,
+            lng: -0.1,
+            accuracy: 5,
+            timestamp: Date.now() - 30_000,
+        });
+
+        startRecording(root);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const takeBack = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
+        const distance = root.querySelector('#distance-walked');
+        expect(takeBack?.disabled).toBe(false);
+        expect(distance?.textContent).not.toBe('0 m');
+        await clearSession();
     });
 
     it('recording stats are hidden before first breadcrumb', () => {
@@ -769,7 +796,7 @@ describe('switchToNavigationView – live navigation', () => {
         vi.unstubAllGlobals();
     });
 
-    it('shows "You\'ve arrived!" when last breadcrumb is reached', async () => {
+    it('shows a near-start message when the final breadcrumb arrival zone is reached', async () => {
         // One breadcrumb very close to user's incoming position
         await appendBreadcrumb({ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 });
 
@@ -786,7 +813,7 @@ describe('switchToNavigationView – live navigation', () => {
         await new Promise(resolve => setTimeout(resolve, 50));
 
         const progressText = root.querySelector('#nav-progress-text');
-        expect(progressText?.textContent).toContain('arrived');
+        expect(progressText?.textContent).toContain('near your start point');
     });
 });
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { bearingDegrees, haversineMeters, lookAheadPoint, pointToSegmentMeters } from '@/geo';
+import {
+    bearingDegrees,
+    haversineMeters,
+    lookAheadPoint,
+    pointToSegmentMeters,
+    trailDistanceMeters,
+} from '@/geo';
 import type { Breadcrumb } from '@/types';
 
 function crumb(lat: number, lng: number): Breadcrumb {
@@ -48,6 +54,22 @@ describe('haversineMeters', () => {
         const b = crumb(51.5000899, 0); // ~10m north
         const dist = haversineMeters(a, b);
         expect(dist).toBeCloseTo(10, 0);
+    });
+});
+
+describe('trailDistanceMeters', () => {
+    it('returns 0 for an empty trail or a single point', () => {
+        expect(trailDistanceMeters([])).toBe(0);
+        expect(trailDistanceMeters([crumb(51.5, 0)])).toBe(0);
+    });
+
+    it('sums consecutive breadcrumb distances', () => {
+        const total = trailDistanceMeters([
+            crumb(51.5, 0),
+            crumb(51.5000899, 0),
+            crumb(51.5001798, 0),
+        ]);
+        expect(total).toBeCloseTo(20, 0);
     });
 });
 
