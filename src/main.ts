@@ -45,6 +45,8 @@ import { createHeadingFusion } from '@/heading-fusion';
 import { LANDMARK_PRESETS } from '@/landmarks';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
+let activeRecordingCleanup: (() => void) | null = null;
+
 function renderA11yControls(): string {
     const size = getFontSize();
     const mode = getThemeMode();
@@ -123,11 +125,11 @@ function wireA11yControls(root: HTMLElement): void {
             const isOn = toggleSimpleMode();
             simpleBtn.setAttribute('aria-pressed', String(isOn));
             simpleBtn.textContent = isOn ? 'Simple: On' : 'Simple: Off';
-            // Re-render navigation view if currently active
-            // GPS, compass, and feedback state are module-level and survive re-render
             if (root.querySelector('#btn-stop-navigation')) {
-                // switchToNavigationView will re-add nav-active
                 switchToNavigationView(root);
+            } else {
+                mountAppShell(root);
+                startRecording(root);
             }
         });
     }
@@ -188,6 +190,14 @@ function renderFullRecordingView(): string {
                 </div>
                 <button
                     class="btn btn--secondary"
+                    id="btn-location-retry"
+                    aria-label="Try location again"
+                    hidden
+                >
+                    Try location again
+                </button>
+                <button
+                    class="btn btn--secondary"
                     id="btn-view-routes"
                     aria-label="View saved routes"
                 >
@@ -215,6 +225,14 @@ function renderSimpleRecordingView(): string {
             <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
                 Stationary
             </div>
+            <button
+                class="btn btn--secondary simple-location-retry"
+                id="btn-location-retry"
+                aria-label="Try location again"
+                hidden
+            >
+                Try location again
+            </button>
             <button
                 class="simple-take-me-back"
                 id="btn-take-me-back"
@@ -351,7 +369,7 @@ function setStatusGpsWeak(root: HTMLElement): void {
     }
 }
 
-function setStatusError(root: HTMLElement, message: string): void {
+function setStatusError(root: HTMLElement, message: string, options?: { retry?: boolean }): void {
     const badge = root.querySelector('#status-badge');
     const statusText = root.querySelector('#status-text');
     if (badge) {
@@ -364,6 +382,14 @@ function setStatusError(root: HTMLElement, message: string): void {
     }
     if (statusText) {
         statusText.textContent = message;
+    }
+    const retryBtn = root.querySelector<HTMLButtonElement>('#btn-location-retry');
+    if (retryBtn) {
+        retryBtn.hidden = options?.retry !== true;
+        retryBtn.onclick = () => {
+            mountAppShell(root);
+            startRecording(root);
+        };
     }
     // Simple mode status bar
     const simpleBar = root.querySelector<HTMLElement>('#simple-status-bar');
@@ -1637,6 +1663,9 @@ function createScreenLock(root: HTMLElement): { destroy: () => void } {
 }
 
 export function startRecording(root: HTMLElement): void {
+    activeRecordingCleanup?.();
+    activeRecordingCleanup = null;
+
     if (!navigator.geolocation) {
         setStatusError(
             root,
@@ -1695,7 +1724,12 @@ export function startRecording(root: HTMLElement): void {
             screenLock.destroy();
             screenLock = null;
         }
+        if (activeRecordingCleanup === cleanupRecording) {
+            activeRecordingCleanup = null;
+        }
     }
+
+    activeRecordingCleanup = cleanupRecording;
 
     function ensureRecordingActionsWired(): void {
         if (recordingActionsWired) return;
@@ -1857,7 +1891,7 @@ export function startRecording(root: HTMLElement): void {
             let message: string;
             if (error.code === error.PERMISSION_DENIED) {
                 message =
-                    'Location is turned off. Open your phone\u2019s Settings, find Location, and make sure it\u2019s turned on for this app.';
+                    'Location is turned off. Allow location for this browser and make sure Location is on for this app.';
             } else if (error.code === error.POSITION_UNAVAILABLE) {
                 message =
                     'Can\u2019t find your location. Try going outside or moving away from buildings.';
@@ -1865,7 +1899,7 @@ export function startRecording(root: HTMLElement): void {
                 message =
                     'Taking too long to find you. Try going outside, then tap the button again.';
             }
-            setStatusError(root, message);
+            setStatusError(root, message, { retry: true });
         }
     );
 }

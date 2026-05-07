@@ -283,7 +283,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
             motion.onMotionlessChange = null;
         }
         if (watchId !== null) {
-            navigator.geolocation.clearWatch(watchId);
+            navigator.geolocation?.clearWatch?.(watchId);
             watchId = null;
         }
         suspended = false;

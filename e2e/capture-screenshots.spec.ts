@@ -186,9 +186,14 @@ test.describe('UI Screenshot Capture - Pixel 7a', () => {
 
         // Click "Take me back"
         await page.click('#btn-take-me-back');
+        await expect(page.locator('#confirm-modal-title')).toHaveText('Go back now?', {
+            timeout: 5000,
+        });
+        await expect(page.locator('#btn-confirm-yes')).toBeEnabled({ timeout: 3000 });
+        await page.click('#btn-confirm-yes');
 
-        // Wait for navigation view to appear
-        await expect(page.locator('#nav-compass-arrow')).toBeVisible({ timeout: 5000 });
+        // Wait for simple navigation view to appear
+        await expect(page.locator('#simple-nav')).toBeVisible({ timeout: 5000 });
         await expect(page.locator('#nav-progress-text')).not.toHaveText('Loading\u2026');
 
         // Send a GPS position so the distance shows a real value
@@ -213,14 +218,22 @@ test.describe('UI Screenshot Capture - Pixel 7a', () => {
 
         // Navigate
         await page.click('#btn-take-me-back');
-        await expect(page.locator('#nav-compass-arrow')).toBeVisible({ timeout: 5000 });
+        await expect(page.locator('#confirm-modal-title')).toHaveText('Go back now?', {
+            timeout: 5000,
+        });
+        await expect(page.locator('#btn-confirm-yes')).toBeEnabled({ timeout: 3000 });
+        await page.click('#btn-confirm-yes');
+        await expect(page.locator('#simple-nav')).toBeVisible({ timeout: 5000 });
         await expect(page.locator('#nav-progress-text')).not.toHaveText('Loading\u2026');
 
         // Send position at same coords — should trigger "arrived"
         await sendGPS(page, POS_A.lat, POS_A.lng);
-        await expect(page.locator('#nav-progress-text')).toHaveText("You've arrived!", {
-            timeout: 5000,
-        });
+        await expect(page.locator('#nav-progress-text')).toHaveText(
+            "You're near your start point.",
+            {
+                timeout: 5000,
+            }
+        );
 
         await page.screenshot({
             path: path.join(SCREENSHOT_DIR, '04-navigation-arrived.png'),
@@ -308,7 +321,8 @@ test.describe('UI Screenshot Capture - Pixel 7a', () => {
         await expect(page.locator('#status-text')).toHaveText('Recording...', { timeout: 5000 });
         await sendGPS(page, POS_B.lat, POS_B.lng);
 
-        // Click "Save this route"
+        // Click "Save this route" from the simple-mode More panel
+        await page.click('#btn-simple-more');
         await page.click('#btn-save-route');
 
         // Wait for modal to appear

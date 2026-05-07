@@ -5,6 +5,7 @@ coverage/
 .env
 .env.local
 .DS_Store
+nul
 *.config.json
 !*.config.example.json
 

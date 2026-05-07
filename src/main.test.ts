@@ -19,7 +19,7 @@ import {
     lerpAngle,
 } from './main';
 import { clearSession, appendBreadcrumb, listRoutes, saveRoute, deleteRoute } from './storage';
-import { setFontSize, FONT_SIZES } from './settings';
+import { initSettings, setFontSize, FONT_SIZES } from './settings';
 
 describe('App Shell', () => {
     let root: HTMLElement;
@@ -176,6 +176,29 @@ describe('startRecording', () => {
 
         const statusText = root.querySelector('#status-text');
         expect(statusText?.textContent).toContain('Location is turned off');
+    });
+
+    it('shows a retry button after a location error and restarts location watching', () => {
+        startRecording(root);
+
+        const error = {
+            code: 1,
+            PERMISSION_DENIED: 1,
+            POSITION_UNAVAILABLE: 2,
+            TIMEOUT: 3,
+            message: 'User denied',
+        } as GeolocationPositionError;
+
+        watchErrorCallback?.(error);
+
+        const retryBtn = root.querySelector<HTMLButtonElement>('#btn-location-retry');
+        expect(retryBtn).not.toBeNull();
+        expect(retryBtn?.hidden).toBe(false);
+
+        retryBtn?.click();
+
+        expect(navigator.geolocation.clearWatch).toHaveBeenCalledWith(1);
+        expect(navigator.geolocation.watchPosition).toHaveBeenCalledTimes(2);
     });
 
     it('shows unavailable error message on POSITION_UNAVAILABLE', () => {
@@ -1371,6 +1394,27 @@ describe('Accessibility controls bar', () => {
         mountAppShell(root);
         const btn = root.querySelector<HTMLButtonElement>('#btn-font-up');
         expect(btn?.disabled).toBe(true);
+    });
+
+    it('re-renders the recording layout when simple mode is toggled', () => {
+        localStorage.setItem('breadcrumbs:simpleMode', 'true');
+        initSettings();
+        vi.stubGlobal('navigator', {
+            geolocation: {
+                watchPosition: vi.fn(() => 1),
+                clearWatch: vi.fn(),
+            },
+        });
+        vi.stubGlobal('isSecureContext', true);
+
+        mountAppShell(root);
+        expect(root.querySelector('.simple-recording-main')).not.toBeNull();
+
+        root.querySelector<HTMLButtonElement>('#btn-simple-mode')?.click();
+
+        expect(root.querySelector('.simple-recording-main')).toBeNull();
+        expect(root.querySelector('.recording-main')).not.toBeNull();
+        expect(navigator.geolocation.watchPosition).toHaveBeenCalled();
     });
 });
 
