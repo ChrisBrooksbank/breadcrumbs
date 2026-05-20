@@ -59,6 +59,7 @@ export type ErrorCallback = (error: GeolocationPositionError) => void;
 
 export interface GeolocationServiceOptions {
     disableMotionSuspension?: boolean;
+    emitEveryFix?: boolean;
 }
 
 export interface GeolocationService {
@@ -88,6 +89,7 @@ interface TimestampedFix {
 }
 
 export function createGeolocationService(options?: GeolocationServiceOptions): GeolocationService {
+    const emitEveryFix = options?.emitEveryFix ?? false;
     let watchId: number | null = null;
     let lastBreadcrumb: Breadcrumb | null = null;
 
@@ -225,7 +227,7 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                     timestamp: position.timestamp,
                 };
 
-                if (lastBreadcrumb !== null) {
+                if (!emitEveryFix && lastBreadcrumb !== null) {
                     const distance = haversineMeters(lastBreadcrumb, candidate);
                     const threshold = adaptiveThreshold(rawBearingHistory);
                     // Always accept if gap exceeds the maximum, otherwise apply adaptive threshold

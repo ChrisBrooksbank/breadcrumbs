@@ -43,9 +43,25 @@ import { classifyDirectionWithHysteresis } from '@/feedback';
 import type { Direction } from '@/feedback';
 import { createHeadingFusion } from '@/heading-fusion';
 import { LANDMARK_PRESETS } from '@/landmarks';
+import { installBreadcrumbSimulator, isSimulatorEnabled } from '@/simulator';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
 let activeRecordingCleanup: (() => void) | null = null;
+
+type DeviceOrientationEventWithPermission = typeof DeviceOrientationEvent & {
+    requestPermission?: () => Promise<'granted' | 'denied'>;
+};
+
+function renderSimulatorControls(): string {
+    if (!isSimulatorEnabled()) return '';
+    return `
+        <div class="simulator-controls" aria-label="Walk simulator controls">
+            <button class="simulator-controls__btn" id="btn-sim-walk" type="button">Sim walk</button>
+            <button class="simulator-controls__btn" id="btn-sim-return" type="button">Sim return</button>
+            <button class="simulator-controls__btn" id="btn-sim-weak-gps" type="button">Bad GPS</button>
+        </div>
+    `;
+}
 
 function renderA11yControls(): string {
     const size = getFontSize();
@@ -133,6 +149,16 @@ function wireA11yControls(root: HTMLElement): void {
             }
         });
     }
+
+    root.querySelector<HTMLButtonElement>('#btn-sim-walk')?.addEventListener('click', () => {
+        window.__breadcrumbsSimulator?.startWalk();
+    });
+    root.querySelector<HTMLButtonElement>('#btn-sim-return')?.addEventListener('click', () => {
+        window.__breadcrumbsSimulator?.startReturn();
+    });
+    root.querySelector<HTMLButtonElement>('#btn-sim-weak-gps')?.addEventListener('click', () => {
+        window.__breadcrumbsSimulator?.sendWeakFix();
+    });
 }
 
 export function mountAppShell(root: HTMLElement): void {
@@ -144,6 +170,7 @@ export function mountAppShell(root: HTMLElement): void {
 function renderFullRecordingView(): string {
     return `
         ${renderA11yControls()}
+        ${renderSimulatorControls()}
         <main class="recording-main">
             <div class="recording-compact" id="recording-status-card">
                 <div class="recording-compact__status">
@@ -160,6 +187,7 @@ function renderFullRecordingView(): string {
                     <span class="recording-compact__sep" aria-hidden="true">&middot;</span>
                     <span class="recording-compact__dist" id="distance-walked">0 m</span>
                 </div>
+                <p class="route-quality route-quality--hidden" id="route-quality" aria-live="polite"></p>
             </div>
             <div class="actions" role="group" aria-label="Route actions">
                 <button
@@ -212,6 +240,7 @@ function renderSimpleRecordingView(): string {
     return `
         <div class="simple-status-bar simple-status-bar--idle" id="simple-status-bar" aria-live="polite"></div>
         ${renderA11yControls()}
+        ${renderSimulatorControls()}
         <main class="simple-recording-main">
             <div class="simple-stats" id="recording-stats" aria-live="polite">
                 <span class="simple-stats__time" id="elapsed-time">0:00</span>
@@ -225,6 +254,7 @@ function renderSimpleRecordingView(): string {
             <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
                 Stationary
             </div>
+            <p class="route-quality route-quality--hidden" id="route-quality" aria-live="polite"></p>
             <button
                 class="btn btn--secondary simple-location-retry"
                 id="btn-location-retry"
@@ -317,6 +347,14 @@ function updateStats(root: HTMLElement, elapsedSeconds: number, totalMeters: num
     if (distanceEl) {
         distanceEl.textContent = formatDistance(totalMeters);
     }
+}
+
+function updateRouteQuality(root: HTMLElement, message: string | null, urgent = false): void {
+    const el = root.querySelector<HTMLElement>('#route-quality');
+    if (!el) return;
+    el.textContent = message ?? '';
+    el.classList.toggle('route-quality--hidden', message === null);
+    el.classList.toggle('route-quality--urgent', urgent);
 }
 
 export function updateStationaryBadge(
@@ -417,6 +455,7 @@ export function mountNavigationView(root: HTMLElement): void {
 function renderFullNavigationView(): string {
     return `
         ${renderA11yControls()}
+        ${renderSimulatorControls()}
         <main class="nav-main">
             <div class="nav-view">
                 <div class="nav-primary">
@@ -430,6 +469,7 @@ function renderFullNavigationView(): string {
                             <div class="nav-progress" id="nav-progress" aria-live="polite">
                                 <span id="nav-progress-text">Loading&hellip;</span>
                             </div>
+                            <div class="nav-recovery-hint" id="nav-recovery-hint" aria-live="polite" hidden></div>
                         </div>
                         <div class="nav-compass-corner" aria-label="Compass direction indicator">
                             <svg class="nav-compass-arrow" id="nav-compass-arrow"
@@ -451,6 +491,9 @@ function renderFullNavigationView(): string {
                 <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
                     Pocket mode
                 </button>
+                <button class="btn btn--secondary" id="btn-enable-compass" aria-label="Enable compass direction" hidden>
+                    Enable compass
+                </button>
                 <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode (tones and vibration only, no speech)" aria-pressed="false">
                     Silent: Off
                 </button>
@@ -465,6 +508,7 @@ function renderFullNavigationView(): string {
 function renderSimpleNavigationView(): string {
     return `
         ${renderA11yControls()}
+        ${renderSimulatorControls()}
         <main class="simple-nav" id="simple-nav" aria-live="polite">
             <div class="simple-nav__direction" id="simple-direction">STRAIGHT</div>
             <div class="simple-nav__distance" id="nav-distance-value">--</div>
@@ -472,11 +516,15 @@ function renderSimpleNavigationView(): string {
             <div class="simple-nav__progress" id="nav-progress" aria-live="polite">
                 <span id="nav-progress-text">Loading&hellip;</span>
             </div>
+            <div class="nav-recovery-hint" id="nav-recovery-hint" aria-live="polite" hidden></div>
         </main>
         <footer class="nav-footer">
             <div class="nav-footer__row">
                 <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
                     Pocket mode
+                </button>
+                <button class="btn btn--secondary" id="btn-enable-compass" aria-label="Enable compass direction" hidden>
+                    Enable compass
                 </button>
                 <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode" aria-pressed="false">
                     Silent: Off
@@ -501,15 +549,23 @@ function updateNavDistance(root: HTMLElement, meters: number): void {
     if (el) el.textContent = formatDistance(meters);
 }
 
-function updateNavProgress(root: HTMLElement, current: number, total: number): void {
+function updateNavProgress(root: HTMLElement, currentIndex: number, total: number): void {
     const el = root.querySelector('#nav-progress-text');
     if (!el) return;
     if (getSimpleMode()) {
-        const remaining = total - current;
+        const remaining = total - currentIndex;
         el.textContent = remaining === 1 ? '1 breadcrumb to go' : `${remaining} breadcrumbs to go`;
     } else {
+        const current = Math.min(currentIndex + 1, total);
         el.textContent = `Breadcrumb ${current} of ${total}`;
     }
+}
+
+function updateNavRecoveryHint(root: HTMLElement, message: string | null): void {
+    const el = root.querySelector<HTMLElement>('#nav-recovery-hint');
+    if (!el) return;
+    el.hidden = message === null;
+    el.textContent = message ?? '';
 }
 
 /** Map a Direction to a simple display word. */
@@ -673,6 +729,40 @@ export function switchToNavigationView(
     const nav = createNavigationService();
     const compass = createCompassService();
     const feedback = createFeedbackService();
+    const orientationEvent = window.DeviceOrientationEvent as
+        | DeviceOrientationEventWithPermission
+        | undefined;
+    const compassPermissionButton = root.querySelector<HTMLButtonElement>('#btn-enable-compass');
+
+    if (compassPermissionButton && typeof orientationEvent?.requestPermission === 'function') {
+        compassPermissionButton.hidden = false;
+        updateNavRecoveryHint(
+            root,
+            'Enable compass for steadier turn directions, or start walking.'
+        );
+        compassPermissionButton.addEventListener('click', () => {
+            orientationEvent
+                .requestPermission?.()
+                .then(permission => {
+                    if (permission === 'granted') {
+                        compassPermissionButton.hidden = true;
+                        compass.start();
+                        updateNavRecoveryHint(root, 'Compass enabled.');
+                    } else {
+                        updateNavRecoveryHint(
+                            root,
+                            'Compass blocked. Keep walking and the app will use GPS direction.'
+                        );
+                    }
+                })
+                .catch(() => {
+                    updateNavRecoveryHint(
+                        root,
+                        'Compass could not start. Keep walking and the app will use GPS direction.'
+                    );
+                });
+        });
+    }
 
     // Wire up silent mode toggle
     const silentBtn = root.querySelector<HTMLButtonElement>('#btn-silent-mode');
@@ -750,7 +840,7 @@ export function switchToNavigationView(
     // Direction reliability: position smoother, heading fusion, hysteresis state
     const smoother = createPositionSmoother(3);
     const fusion = createHeadingFusion();
-    const navGps = createGeolocationService({ disableMotionSuspension: true });
+    const navGps = createGeolocationService({ disableMotionSuspension: true, emitEveryFix: true });
     let previousDirection: Direction | null = null;
     let lastSimpleUpdateTime = 0;
     const SIMPLE_THROTTLE_MS = 1000;
@@ -883,10 +973,35 @@ export function switchToNavigationView(
             }
 
             const progress = nav.progress;
-            updateNavProgress(root, progress.currentIndex + 1, progress.total);
+            updateNavProgress(root, progress.currentIndex, progress.total);
 
             const distanceEl = root.querySelector('#nav-distance-value');
             if (distanceEl) distanceEl.textContent = '-- m';
+
+            if (!followMode && trailBreadcrumbs.length > 0) {
+                currentPos = trailBreadcrumbs[0];
+                smoother.push(currentPos);
+                nav.advanceIfClose(currentPos);
+                const initialProgress = nav.progress;
+                if (initialProgress.arrived) {
+                    showNavArrived(root);
+                } else {
+                    updateNavProgress(root, initialProgress.currentIndex, initialProgress.total);
+                    const initialTarget = nav.targetBreadcrumb;
+                    if (initialTarget) {
+                        updateNavDistance(
+                            root,
+                            getSimpleMode()
+                                ? remainingTrailDistance(
+                                      currentPos,
+                                      trailBreadcrumbs,
+                                      initialProgress.currentIndex
+                                  )
+                                : haversineMeters(currentPos, initialTarget)
+                        );
+                    }
+                }
+            }
 
             compass.start();
 
@@ -897,8 +1012,13 @@ export function switchToNavigationView(
             nav.onOffRouteChange = (offRoute: boolean) => {
                 if (offRoute) {
                     feedback.playOffRouteFeedback();
+                    updateNavRecoveryHint(
+                        root,
+                        'Off trail. Turn until the direction says STRAIGHT, then walk back toward the route.'
+                    );
                 } else {
                     feedback.playBackOnTrackFeedback();
+                    updateNavRecoveryHint(root, 'Back on track.');
                 }
                 renderTrail();
             };
@@ -921,6 +1041,51 @@ export function switchToNavigationView(
                         compass.stop();
                         if (pocketMode) exitPocketMode();
                         return;
+                    }
+
+                    const prevTarget = nav.targetBreadcrumb;
+                    const advanced = nav.advanceIfClose(breadcrumb);
+                    if (advanced) {
+                        feedback.playConfirmationBeep();
+                        feedback.resetDistanceAnnouncements();
+                        offCourseDetector.reset();
+                        previousDirection = null; // reset hysteresis on breadcrumb advance
+                        // Reset arrow smoothing so it snaps to the new target
+                        targetArrowDeg = null;
+                        displayedArrowDeg = null;
+                        feedback.resetAlignmentHysteresis();
+                        landmarkAnnouncedFar = false;
+                        landmarkAnnouncedNear = false;
+                        if (nav.progress.arrived) {
+                            showNavArrived(root);
+                            feedback.cancelPending();
+                            feedback.playArrivalFeedback();
+                            navGps.stop();
+                            compass.stop();
+                            if (pocketMode) exitPocketMode();
+                        } else {
+                            const p = nav.progress;
+                            updateNavProgress(root, p.currentIndex, p.total);
+                            // Announce major turn (> 90°) when the new leg requires it
+                            const newTarget = nav.targetBreadcrumb;
+                            if (prevTarget && newTarget) {
+                                const turn = majorTurnDirection(breadcrumb, prevTarget, newTarget);
+                                if (turn) {
+                                    feedback.announce(turn);
+                                }
+                            }
+                        }
+                    } else {
+                        const p = nav.progress;
+                        updateNavProgress(root, p.currentIndex, p.total);
+                        // Check for sustained off-course heading on GPS updates
+                        const headingForCheck =
+                            fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
+                        if (bearingToBreadcrumb !== null && headingForCheck !== null) {
+                            if (offCourseDetector.check(bearingToBreadcrumb - headingForCheck)) {
+                                feedback.speak("you're going the wrong way");
+                            }
+                        }
                     }
 
                     const target = nav.targetBreadcrumb;
@@ -959,49 +1124,13 @@ export function switchToNavigationView(
                         }
                     }
 
-                    const prevTarget = nav.targetBreadcrumb;
-                    const advanced = nav.advanceIfClose(breadcrumb);
-                    if (advanced) {
-                        feedback.playConfirmationBeep();
-                        feedback.resetDistanceAnnouncements();
-                        offCourseDetector.reset();
-                        previousDirection = null; // reset hysteresis on breadcrumb advance
-                        // Reset arrow smoothing so it snaps to the new target
-                        targetArrowDeg = null;
-                        displayedArrowDeg = null;
-                        feedback.resetAlignmentHysteresis();
-                        landmarkAnnouncedFar = false;
-                        landmarkAnnouncedNear = false;
-                        if (nav.progress.arrived) {
-                            showNavArrived(root);
-                            feedback.cancelPending();
-                            feedback.playArrivalFeedback();
-                            navGps.stop();
-                            compass.stop();
-                            if (pocketMode) exitPocketMode();
-                        } else {
-                            const p = nav.progress;
-                            updateNavProgress(root, p.currentIndex + 1, p.total);
-                            // Announce major turn (> 90°) when the new leg requires it
-                            const newTarget = nav.targetBreadcrumb;
-                            if (prevTarget && newTarget) {
-                                const turn = majorTurnDirection(breadcrumb, prevTarget, newTarget);
-                                if (turn) {
-                                    feedback.announce(turn);
-                                }
-                            }
-                        }
-                    } else {
-                        const p = nav.progress;
-                        updateNavProgress(root, p.currentIndex + 1, p.total);
-                        // Check for sustained off-course heading on GPS updates
-                        const headingForCheck =
-                            fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
-                        if (bearingToBreadcrumb !== null && headingForCheck !== null) {
-                            if (offCourseDetector.check(bearingToBreadcrumb - headingForCheck)) {
-                                feedback.speak("you're going the wrong way");
-                            }
-                        }
+                    if (!nav.isOffRoute && !compass.compassHeading && !navGps.movementBearing) {
+                        updateNavRecoveryHint(
+                            root,
+                            'Waiting for direction. Point your phone forward or walk a few steps.'
+                        );
+                    } else if (!nav.isOffRoute) {
+                        updateNavRecoveryHint(root, null);
                     }
 
                     refreshArrow();
@@ -1702,6 +1831,7 @@ export function startRecording(root: HTMLElement): void {
     let screenLock: { destroy: () => void } | null = null;
     let restoredExistingSession = false;
     let recordingActionsWired = false;
+    let poorAccuracyStreak = 0;
 
     // Wire simple mode "More..." toggle
     const moreBtn = root.querySelector<HTMLButtonElement>('#btn-simple-more');
@@ -1825,6 +1955,12 @@ export function startRecording(root: HTMLElement): void {
     }
 
     gps.onPoorAccuracy = () => {
+        poorAccuracyStreak++;
+        updateRouteQuality(
+            root,
+            'GPS weak - route may be rough. Move toward open sky if you can.',
+            true
+        );
         if (breadcrumbCount === 0) {
             gotResponse = true;
             clearTimeout(requestTimeout);
@@ -1850,6 +1986,27 @@ export function startRecording(root: HTMLElement): void {
                 totalMeters += haversineMeters(lastBreadcrumb, breadcrumb);
             }
             lastBreadcrumb = breadcrumb;
+
+            if (breadcrumb.accuracy > 20) {
+                updateRouteQuality(
+                    root,
+                    `GPS accuracy is about ${Math.round(
+                        breadcrumb.accuracy
+                    )} m - use extra care on the return.`,
+                    true
+                );
+            } else if (poorAccuracyStreak > 0) {
+                poorAccuracyStreak = 0;
+                updateRouteQuality(root, 'GPS looks better now.');
+                setTimeout(() => updateRouteQuality(root, null), 5000);
+            } else if (breadcrumbCount < 3) {
+                updateRouteQuality(
+                    root,
+                    'Keep walking a little farther for a more reliable route.'
+                );
+            } else {
+                updateRouteQuality(root, null);
+            }
 
             updateStationaryBadge(root, gps.isStationary, gps.isSuspended);
 
@@ -1906,6 +2063,7 @@ export function startRecording(root: HTMLElement): void {
 
 const appRoot = document.getElementById('app');
 if (appRoot) {
+    installBreadcrumbSimulator();
     initSettings();
     mountAppShell(appRoot);
     startRecording(appRoot);

@@ -235,6 +235,20 @@ describe('startRecording', () => {
         expect(statusText?.textContent).toContain('Taking too long');
     });
 
+    it('shows a route quality warning when GPS accuracy is weak', async () => {
+        startRecording(root);
+
+        watchPositionCallback({
+            coords: { latitude: 51.5, longitude: -0.1, accuracy: 90 },
+            timestamp: 1000,
+        } as GeolocationPosition);
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const warning = root.querySelector('#route-quality');
+        expect(warning?.textContent).toContain('GPS weak');
+    });
+
     it('adds error CSS class on geolocation error', () => {
         startRecording(root);
 
@@ -698,7 +712,7 @@ describe('switchToNavigationView – live navigation', () => {
         };
     });
 
-    it('shows progress "Breadcrumb 1 of N" when session has breadcrumbs', async () => {
+    it('uses the last recorded point for immediate return guidance', async () => {
         // Seed two breadcrumbs into the session
         await appendBreadcrumb({ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 });
         await appendBreadcrumb({ lat: 51.501, lng: -0.1, accuracy: 5, timestamp: 2000 });
@@ -708,7 +722,9 @@ describe('switchToNavigationView – live navigation', () => {
         await new Promise(resolve => setTimeout(resolve, 50));
 
         const progressText = root.querySelector('#nav-progress-text');
-        expect(progressText?.textContent).toMatch(/Breadcrumb 1 of 2/);
+        const distanceText = root.querySelector('#nav-distance-value');
+        expect(progressText?.textContent).toMatch(/Breadcrumb 2 of 2/);
+        expect(distanceText?.textContent).not.toBe('-- m');
     });
 
     it('updates distance display when GPS position received during navigation', async () => {
@@ -731,6 +747,52 @@ describe('switchToNavigationView – live navigation', () => {
         // Should now show a real distance (not the initial "--")
         expect(distanceEl?.textContent).not.toBe('--');
         expect(distanceEl?.textContent).toMatch(/m|km/);
+    });
+
+    it('simulated return advances from the turnaround point and shows distance to the next target immediately', async () => {
+        await appendBreadcrumb({ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 });
+        await appendBreadcrumb({ lat: 51.5005, lng: -0.1, accuracy: 5, timestamp: 2000 });
+        await appendBreadcrumb({ lat: 51.501, lng: -0.1, accuracy: 5, timestamp: 3000 });
+
+        mountAppShell(root);
+        switchToNavigationView(root);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        watchPositionCallback({
+            coords: { latitude: 51.501, longitude: -0.1, accuracy: 5 },
+            timestamp: 4000,
+        } as GeolocationPosition);
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const progressText = root.querySelector('#nav-progress-text');
+        const distanceEl = root.querySelector('#nav-distance-value');
+        expect(progressText?.textContent).toMatch(/Breadcrumb 2 of 3/);
+        expect(distanceEl?.textContent).toMatch(/5[0-9] m/);
+    });
+
+    it('shows recovery guidance after sustained off-trail fixes', async () => {
+        await appendBreadcrumb({ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 });
+        await appendBreadcrumb({ lat: 51.501, lng: -0.1, accuracy: 5, timestamp: 2000 });
+        await appendBreadcrumb({ lat: 51.502, lng: -0.1, accuracy: 5, timestamp: 3000 });
+
+        mountAppShell(root);
+        switchToNavigationView(root);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const offTrailFix = {
+            coords: { latitude: 51.501, longitude: -0.0985, accuracy: 5 },
+            timestamp: 4000,
+        } as GeolocationPosition;
+        watchPositionCallback(offTrailFix);
+        watchPositionCallback({ ...offTrailFix, timestamp: 5000 } as GeolocationPosition);
+        watchPositionCallback({ ...offTrailFix, timestamp: 6000 } as GeolocationPosition);
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const hint = root.querySelector<HTMLElement>('#nav-recovery-hint');
+        expect(hint?.hidden).toBe(false);
+        expect(hint?.textContent).toContain('Off trail');
     });
 
     it('rotates compass arrow when deviceorientation event fires', async () => {

@@ -158,7 +158,7 @@ export interface FeedbackService {
     readonly vibrationAvailable: boolean;
     /**
      * Play off-route feedback when the user strays > 30m from the trail.
-     * - Voice: "You're off the trail" (suppressed in silent mode)
+     * - Voice: recovery guidance (suppressed in silent mode)
      * - Haptic: distinct pattern `[100, 50, 100, 50, 100]` (always fires)
      * No-ops when speech/vibration are unavailable.
      */
@@ -344,7 +344,9 @@ export function createFeedbackService(): FeedbackService {
         vibrate([100, 50, 100, 50, 100]);
         // Speech only when not in silent mode
         if (!_silentMode) {
-            announce("You're off the trail");
+            announce(
+                "You're off the trail. Turn until the direction says straight, then walk back."
+            );
         }
     }
 

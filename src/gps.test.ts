@@ -161,6 +161,18 @@ describe('GeolocationService – filtering logic', () => {
             // Note: 10m is the threshold (< 10 is dropped), so exactly 10m would pass
             expect(onBreadcrumb.mock.calls.length).toBeGreaterThanOrEqual(1);
         });
+
+        it('can emit every accurate fix for live navigation', () => {
+            const service = createGeolocationService({ emitEveryFix: true });
+            const onBreadcrumb = vi.fn();
+            service.start(onBreadcrumb);
+
+            watchCallback(makePosition(51.5, -0.1, 5, 1000));
+            watchCallback(makePosition(51.5000045, -0.1, 5, 2000));
+            watchCallback(makePosition(51.500009, -0.1, 5, 3000));
+
+            expect(onBreadcrumb).toHaveBeenCalledTimes(3);
+        });
     });
 
     describe('combined accuracy and distance filtering', () => {

@@ -968,11 +968,13 @@ describe('FeedbackService – off-route feedback', () => {
         expect(vibrateMock).toHaveBeenCalledWith([100, 50, 100, 50, 100]);
     });
 
-    it('playOffRouteFeedback() announces "You\'re off the trail" when not in silent mode', () => {
+    it('playOffRouteFeedback() announces recovery guidance when not in silent mode', () => {
         const service = createFeedbackService();
         service.playOffRouteFeedback();
         const phrases = speakMock.mock.calls.map((c: unknown[]) => (c[0] as { text: string }).text);
-        expect(phrases).toContain("You're off the trail");
+        expect(phrases).toContain(
+            "You're off the trail. Turn until the direction says straight, then walk back."
+        );
     });
 
     it('playOffRouteFeedback() suppresses speech in silent mode but still vibrates', () => {
