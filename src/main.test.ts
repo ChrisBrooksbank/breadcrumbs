@@ -18,7 +18,14 @@ import {
     shortestArcDistance,
     lerpAngle,
 } from './main';
-import { clearSession, appendBreadcrumb, listRoutes, saveRoute, deleteRoute } from './storage';
+import {
+    clearSession,
+    appendBreadcrumb,
+    getSession,
+    listRoutes,
+    saveRoute,
+    deleteRoute,
+} from './storage';
 import { initSettings, setFontSize, FONT_SIZES } from './settings';
 
 describe('App Shell', () => {
@@ -63,6 +70,12 @@ describe('App Shell', () => {
         expect(btn?.textContent?.trim()).toBe('Save route');
     });
 
+    it('renders "New route" button', () => {
+        const btn = root.querySelector('#btn-new-route') as HTMLButtonElement | null;
+        expect(btn).not.toBeNull();
+        expect(btn?.textContent?.trim()).toBe('New route');
+    });
+
     it('"Take me back" button is disabled by default', () => {
         const btn = root.querySelector('#btn-take-me-back') as HTMLButtonElement | null;
         expect(btn?.disabled).toBe(true);
@@ -70,6 +83,11 @@ describe('App Shell', () => {
 
     it('"Save this route" button is disabled by default', () => {
         const btn = root.querySelector('#btn-save-route') as HTMLButtonElement | null;
+        expect(btn?.disabled).toBe(true);
+    });
+
+    it('"New route" button is disabled by default', () => {
+        const btn = root.querySelector('#btn-new-route') as HTMLButtonElement | null;
         expect(btn?.disabled).toBe(true);
     });
 
@@ -297,6 +315,44 @@ describe('startRecording', () => {
         expect(takeBack?.disabled).toBe(false);
         expect(distance?.textContent).not.toBe('0 m');
         await clearSession();
+    });
+
+    it('shows reset guidance when restoring an existing route', async () => {
+        await appendBreadcrumb({
+            lat: 51.5,
+            lng: -0.1,
+            accuracy: 5,
+            timestamp: Date.now() - 60_000,
+        });
+
+        startRecording(root);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const message = root.querySelector('#route-quality');
+        const newRoute = root.querySelector<HTMLButtonElement>('#btn-new-route');
+        expect(message?.textContent).toContain('Continuing your previous route');
+        expect(newRoute?.disabled).toBe(false);
+    });
+
+    it('clears the current route and restarts recording from the New route button', async () => {
+        await appendBreadcrumb({
+            lat: 51.5,
+            lng: -0.1,
+            accuracy: 5,
+            timestamp: Date.now() - 60_000,
+        });
+
+        startRecording(root);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        root.querySelector<HTMLButtonElement>('#btn-new-route')?.click();
+        document.querySelector<HTMLButtonElement>('#btn-confirm-yes')?.click();
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        expect(await getSession()).toBeUndefined();
+        expect(navigator.geolocation.clearWatch).toHaveBeenCalledWith(1);
+        expect(navigator.geolocation.watchPosition).toHaveBeenCalledTimes(2);
+        _resetModalOpen();
     });
 
     it('recording stats are hidden before first breadcrumb', () => {

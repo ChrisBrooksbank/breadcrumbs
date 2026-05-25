@@ -217,6 +217,14 @@ function renderFullRecordingView(): string {
                     </button>
                 </div>
                 <button
+                    class="btn btn--danger"
+                    id="btn-new-route"
+                    aria-label="Clear current route and start a new route"
+                    disabled
+                >
+                    New route
+                </button>
+                <button
                     class="btn btn--secondary"
                     id="btn-location-retry"
                     aria-label="Try location again"
@@ -290,6 +298,7 @@ function renderSimpleRecordingView(): string {
             <div class="simple-more-panel" id="simple-more-panel" hidden>
                 <button class="btn btn--secondary" id="btn-save-route" aria-label="Save this route for later" disabled>Save this route</button>
                 <button class="btn btn--landmark" id="btn-mark-landmark" aria-label="Mark this spot as a landmark" disabled>Mark landmark</button>
+                <button class="btn btn--danger" id="btn-new-route" aria-label="Clear current route and start a new route" disabled>New route</button>
             </div>
         </main>
     `;
@@ -441,9 +450,11 @@ function enableActionButtons(root: HTMLElement): void {
     const takeBack = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
     const saveRoute = root.querySelector<HTMLButtonElement>('#btn-save-route');
     const markLandmark = root.querySelector<HTMLButtonElement>('#btn-mark-landmark');
+    const newRoute = root.querySelector<HTMLButtonElement>('#btn-new-route');
     if (takeBack) takeBack.disabled = false;
     if (saveRoute) saveRoute.disabled = false;
     if (markLandmark) markLandmark.disabled = false;
+    if (newRoute) newRoute.disabled = false;
 }
 
 export function mountNavigationView(root: HTMLElement): void {
@@ -1861,6 +1872,14 @@ export function startRecording(root: HTMLElement): void {
 
     activeRecordingCleanup = cleanupRecording;
 
+    function startStatsTimer(): void {
+        if (timerInterval !== null) return;
+        timerInterval = setInterval(() => {
+            const elapsedSeconds = Math.floor((Date.now() - (startTime ?? Date.now())) / 1000);
+            updateStats(root, elapsedSeconds, totalMeters);
+        }, 1000);
+    }
+
     function ensureRecordingActionsWired(): void {
         if (recordingActionsWired) return;
         recordingActionsWired = true;
@@ -1917,6 +1936,32 @@ export function startRecording(root: HTMLElement): void {
                     });
             });
         }
+
+        const newRouteBtn = root.querySelector<HTMLButtonElement>('#btn-new-route');
+        if (newRouteBtn) {
+            newRouteBtn.addEventListener('click', () => {
+                openConfirmDialog(
+                    'Start a new route?',
+                    'This clears the current unsaved route and starts recording from here.',
+                    'New route',
+                    () => {
+                        cleanupRecording();
+                        clearSession()
+                            .catch(() => {
+                                updateRouteQuality(
+                                    root,
+                                    'Could not clear the current route.',
+                                    true
+                                );
+                            })
+                            .finally(() => {
+                                mountAppShell(root);
+                                startRecording(root);
+                            });
+                    }
+                );
+            });
+        }
     }
 
     getSession()
@@ -1930,11 +1975,13 @@ export function startRecording(root: HTMLElement): void {
             setStatusRecording(root);
             ensureRecordingActionsWired();
             enableActionButtons(root);
+            updateRouteQuality(root, 'Continuing your previous route. Use New route to reset.');
             updateStats(
                 root,
                 Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000)),
                 totalMeters
             );
+            startStatsTimer();
             if (!screenLock) {
                 screenLock = createScreenLock(root);
             }
@@ -2026,13 +2073,9 @@ export function startRecording(root: HTMLElement): void {
                 if (!startTime) {
                     startTime = isFirstRenderForRestoredSession ? breadcrumb.timestamp : Date.now();
                 }
-                timerInterval = setInterval(() => {
-                    const elapsedSeconds = Math.floor(
-                        (Date.now() - (startTime ?? Date.now())) / 1000
-                    );
-                    updateStats(root, elapsedSeconds, totalMeters);
-                }, 1000);
-                updateStats(root, 0, totalMeters);
+                startStatsTimer();
+                const elapsedSeconds = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+                updateStats(root, elapsedSeconds, totalMeters);
             } else {
                 const elapsedSeconds = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
                 updateStats(root, elapsedSeconds, totalMeters);
