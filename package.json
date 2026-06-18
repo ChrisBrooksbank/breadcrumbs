@@ -1,6 +1,7 @@
 {
     "name": "breadcrumbs",
     "version": "1.0.0",
+    "license": "MIT",
     "description": "A map-free GPS breadcrumb PWA for recording walking routes and retracing your steps",
     "type": "module",
     "scripts": {
