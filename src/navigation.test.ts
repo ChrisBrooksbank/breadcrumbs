@@ -1252,6 +1252,29 @@ describe('findTurns and NavigationService.nextTurn', () => {
         expect(next?.meters).toBeLessThan(105);
     });
 
+    it('keeps a corner as the next turn until the walker is round it, even after its crumb is reached', () => {
+        const service = createNavigationService();
+        service.loadForward(lShape);
+        // 8 m short of the corner at (0, 100): the corner crumb (within 15 m) counts as reached
+        for (let y = 0; y <= 92; y += 4) service.advanceIfClose(offsetCrumb(0, y));
+
+        const next = service.nextTurn(offsetCrumb(0, 92));
+        expect(next?.direction).toBe('right');
+        expect(next?.meters).toBeGreaterThan(6);
+        expect(next?.meters).toBeLessThan(10);
+    });
+
+    it('drops the corner once the walker has turned it', () => {
+        const service = createNavigationService();
+        service.loadForward(lShape);
+        for (let y = 0; y <= 100; y += 4) service.advanceIfClose(offsetCrumb(0, y));
+        expect(service.nextTurn(offsetCrumb(0, 100))?.direction).toBe('right');
+
+        service.advanceIfClose(offsetCrumb(6, 100));
+        service.advanceIfClose(offsetCrumb(12, 100));
+        expect(service.nextTurn(offsetCrumb(12, 100))).toBeNull();
+    });
+
     it('moves on to the following corner and then reports none', () => {
         const service = createNavigationService();
         service.loadForward(lShape);

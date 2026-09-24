@@ -22,6 +22,7 @@ import { createWakeLockManager } from '@/wake-lock';
 import { createAudioKeepAlive } from '@/audio-keepalive';
 import { createShakeDetector } from '@/motion';
 import { createFeedbackService } from '@/feedback';
+import { createGuidanceCoach } from '@/coach';
 import {
     initSettings,
     getFontSize,
@@ -40,6 +41,7 @@ import { installBreadcrumbSimulator, isSimulatorEnabled } from '@/simulator';
 import type { Breadcrumb, SavedRoute } from '@/types';
 
 let activeRecordingCleanup: (() => void) | null = null;
+let activeNavigationCleanup: (() => void) | null = null;
 
 type DeviceOrientationEventWithPermission = typeof DeviceOrientationEvent & {
     requestPermission?: () => Promise<'granted' | 'denied'>;
@@ -570,33 +572,6 @@ function showNavArrived(root: HTMLElement): void {
     updateNavNextTurn(root, null);
 }
 
-/**
- * Detects if advancing to a new navigation leg requires a major turn (> 90°).
- *
- * @param fromPos    The current GPS position (where the user just was)
- * @param prevTarget The breadcrumb just reached
- * @param newTarget  The next target breadcrumb
- * @returns 'turn left', 'turn right', or null if no major turn
- */
-export function majorTurnDirection(
-    fromPos: Breadcrumb,
-    prevTarget: Breadcrumb,
-    newTarget: Breadcrumb
-): 'turn left' | 'turn right' | null {
-    const prevBearing = bearingDegrees(fromPos, prevTarget);
-    const newBearing = bearingDegrees(prevTarget, newTarget);
-
-    // Compute the signed angular difference from prevBearing to newBearing
-    let delta = newBearing - prevBearing;
-    // Normalise to -180..+180
-    if (delta > 180) delta -= 360;
-    if (delta < -180) delta += 360;
-
-    if (delta > 90) return 'turn right';
-    if (delta < -90) return 'turn left';
-    return null;
-}
-
 /** Detects sustained off-course heading across consecutive GPS fixes. */
 export interface OffCourseDetector {
     /**
@@ -671,12 +646,17 @@ export function switchToNavigationView(
     root: HTMLElement,
     breadcrumbsOverride?: Breadcrumb[]
 ): void {
+    // Only one navigation session at a time: stop any that is still listening
+    activeNavigationCleanup?.();
+    activeNavigationCleanup = null;
+
     const followMode = breadcrumbsOverride !== undefined;
     root.classList.add('nav-active');
     mountNavigationView(root);
     const nav = createNavigationService();
     const compass = createCompassService();
     const feedback = createFeedbackService();
+    const guidanceCoach = createGuidanceCoach();
     const orientationEvent = window.DeviceOrientationEvent as
         | DeviceOrientationEventWithPermission
         | undefined;
@@ -838,12 +818,29 @@ export function switchToNavigationView(
         updateNavDirection(root, dir, nav.isOffRoute);
     }
 
+    /** Ask the coach what to say/buzz for the current state, and deliver it. */
+    function deliverGuidance(accuracy?: number): void {
+        if (!currentPos) return;
+        const nearest = nav.nearestPathPoint(currentPos);
+        const cues = guidanceCoach.update({
+            arrived: nav.progress.arrived,
+            offRoute: nav.isOffRoute,
+            distanceToRoute: nearest?.distance ?? null,
+            remainingMeters: nav.remainingMeters(currentPos),
+            nextTurn: nav.nextTurn(currentPos),
+            inGap: nav.inGap,
+            currentIndex: nav.progress.currentIndex,
+            accuracy: accuracy ?? currentPos.accuracy,
+        });
+        for (const cue of cues) feedback.cue(cue);
+    }
+
     /** Arrived: celebrate, stop tracking, and offer Save / Done instead of "stop navigation". */
     function handleArrival(): void {
         showNavArrived(root);
         updateNavRecoveryHint(root, null);
         feedback.cancelPending();
-        feedback.playArrivalFeedback();
+        deliverGuidance();
         navGps.stop();
         compass.stop();
         if (pocketMode) exitPocketMode();
@@ -1032,7 +1029,6 @@ export function switchToNavigationView(
                     offRoute ? 'wrong' : previousDirection ? panelState(previousDirection) : 'idle'
                 );
                 if (offRoute) {
-                    feedback.playOffRouteFeedback();
                     const nearest = currentPos ? nav.nearestPathPoint(currentPos) : null;
                     updateNavRecoveryHint(
                         root,
@@ -1041,10 +1037,17 @@ export function switchToNavigationView(
                             : 'Off trail. Turn until the direction says STRAIGHT, then walk back toward the route.'
                     );
                 } else {
-                    feedback.playBackOnTrackFeedback();
                     updateNavRecoveryHint(root, 'Back on track.');
                 }
                 renderTrail();
+            };
+
+            // Fixes worse than the GPS service's accuracy gate never reach the callback below,
+            // so weak signal is reported through this hook instead.
+            navGps.onPoorAccuracy = (accuracy: number) => {
+                if (nav.progress.arrived) return;
+                updateNavRecoveryHint(root, 'GPS signal is weak. Move toward open sky if you can.');
+                deliverGuidance(accuracy);
             };
 
             navGps.start(
@@ -1062,11 +1065,9 @@ export function switchToNavigationView(
                         return;
                     }
 
-                    const prevTarget = nav.targetBreadcrumb;
                     const advanced = nav.advanceIfClose(breadcrumb);
                     if (advanced) {
                         feedback.playConfirmationBeep();
-                        feedback.resetDistanceAnnouncements();
                         offCourseDetector.reset();
                         previousDirection = null; // reset hysteresis on breadcrumb advance
                         // Reset arrow smoothing so it snaps to the new target
@@ -1080,14 +1081,6 @@ export function switchToNavigationView(
                         } else {
                             const p = nav.progress;
                             updateNavProgress(root, p.currentIndex, p.total);
-                            // Announce major turn (> 90°) when the new leg requires it
-                            const newTarget = nav.targetBreadcrumb;
-                            if (prevTarget && newTarget) {
-                                const turn = majorTurnDirection(breadcrumb, prevTarget, newTarget);
-                                if (turn) {
-                                    feedback.announce(turn);
-                                }
-                            }
                         }
                     } else {
                         const p = nav.progress;
@@ -1095,7 +1088,10 @@ export function switchToNavigationView(
                         // Check for sustained off-course heading on GPS updates
                         const headingForCheck = currentHeading();
                         if (bearingToBreadcrumb !== null && headingForCheck !== null) {
-                            if (offCourseDetector.check(bearingToBreadcrumb - headingForCheck)) {
+                            if (
+                                offCourseDetector.check(bearingToBreadcrumb - headingForCheck) &&
+                                !nav.isOffRoute
+                            ) {
                                 feedback.speak("you're going the wrong way");
                             }
                         }
@@ -1105,7 +1101,6 @@ export function switchToNavigationView(
                     if (target) {
                         const dist = haversineMeters(breadcrumb, target);
                         updateNavDistance(root, nav.remainingMeters(breadcrumb));
-                        feedback.announceDistance(dist);
                         feedback.vibrateProximity(dist);
 
                         // Smart GPS: low accuracy when far, high when close
@@ -1129,6 +1124,7 @@ export function switchToNavigationView(
                     }
 
                     updateNavNextTurn(root, nav.nextTurn(breadcrumb));
+                    deliverGuidance();
 
                     if (!nav.isOffRoute) {
                         const nearest = nav.nearestPathPoint(breadcrumb);
@@ -1177,12 +1173,44 @@ export function switchToNavigationView(
         wakeLock.destroy();
     }
 
-    /** Leave navigation and go back to the recording screen. */
-    function leaveNavigation(): void {
+    // A PWA in the background is throttled or stopped: warn as it goes there, and on return
+    let hiddenAt: number | null = null;
+    function handleVisibilityChange(): void {
+        if (nav.progress.arrived) return;
+        if (document.visibilityState === 'hidden') {
+            // Pocket mode keeps the app alive on purpose with audio; it needs no warning
+            if (pocketMode) return;
+            hiddenAt = Date.now();
+            feedback.cue({
+                id: 'app-hidden',
+                speech: 'The app is in the background. Keep it open on screen for directions.',
+                haptic: [150, 100, 150],
+                priority: 'critical',
+            });
+        } else if (hiddenAt !== null) {
+            const away = Date.now() - hiddenAt;
+            hiddenAt = null;
+            if (away >= 10_000) {
+                updateNavRecoveryHint(root, 'Welcome back. Waiting for a fresh GPS fix\u2026');
+            }
+        }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    /** Stop everything this navigation session started (GPS, compass, alerts, pocket mode). */
+    function stopNavigationServices(): void {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
         feedback.cancelPending();
         compass.stop();
         navGps.stop();
         cleanupPocketMode();
+        if (activeNavigationCleanup === stopNavigationServices) activeNavigationCleanup = null;
+    }
+    activeNavigationCleanup = stopNavigationServices;
+
+    /** Leave navigation and go back to the recording screen. */
+    function leaveNavigation(): void {
+        stopNavigationServices();
         root.classList.remove('nav-active');
         mountAppShell(root);
         startRecording(root);

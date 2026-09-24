@@ -13,7 +13,6 @@ import {
     mountSavedRoutesView,
     _resetModalOpen,
     createOffCourseDetector,
-    majorTurnDirection,
     updateStationaryBadge,
     shortestArcDistance,
     lerpAngle,
@@ -1681,79 +1680,6 @@ describe('createOffCourseDetector – sustained off-course detection', () => {
         expect(detector.check(50)).toBe(false);
         expect(detector.check(50)).toBe(false);
         expect(detector.check(50)).toBe(true);
-    });
-});
-
-describe('majorTurnDirection', () => {
-    // Helper: create a Breadcrumb at given lat/lng
-    function bc(
-        lat: number,
-        lng: number
-    ): { lat: number; lng: number; accuracy: number; timestamp: number } {
-        return { lat, lng, accuracy: 5, timestamp: 0 };
-    }
-
-    it('returns null when the new leg is straight ahead (< 90° turn)', () => {
-        // Walking north, new leg also north — no turn
-        const fromPos = bc(51.5, -0.1);
-        const prevTarget = bc(51.501, -0.1); // north of fromPos
-        const newTarget = bc(51.502, -0.1); // north of prevTarget
-        expect(majorTurnDirection(fromPos, prevTarget, newTarget)).toBeNull();
-    });
-
-    it('returns "turn right" when new leg is clearly right (SE) of previous north leg', () => {
-        // Walking north, then turning south-east (> 90° right)
-        const fromPos = bc(51.5, -0.1);
-        const prevTarget = bc(51.501, -0.1); // due north (~0°)
-        const newTarget = bc(51.5, -0.08); // SE from prevTarget: south and east (~135°)
-        const result = majorTurnDirection(fromPos, prevTarget, newTarget);
-        expect(result).toBe('turn right');
-    });
-
-    it('returns "turn left" when new leg is clearly left (SW) of previous north leg', () => {
-        // Walking north, then turning south-west (> 90° left)
-        const fromPos = bc(51.5, -0.1);
-        const prevTarget = bc(51.501, -0.1); // due north (~0°)
-        const newTarget = bc(51.5, -0.12); // SW from prevTarget: south and west (~225° = -135°)
-        const result = majorTurnDirection(fromPos, prevTarget, newTarget);
-        expect(result).toBe('turn left');
-    });
-
-    it('returns null for a 45° right turn (less than 90°)', () => {
-        // Walking north then slight diagonal NE — 45° is not a major turn
-        const fromPos = bc(51.5, -0.1);
-        const prevTarget = bc(51.501, -0.1);
-        // ~45° NE: equal lat and lng change
-        const newTarget = bc(51.5017, -0.0895);
-        const result = majorTurnDirection(fromPos, prevTarget, newTarget);
-        expect(result).toBeNull();
-    });
-
-    it('returns "turn right" for a U-turn to the right (180°)', () => {
-        // Walking north, then doubling back south — massive right or left turn
-        const fromPos = bc(51.5, -0.1);
-        const prevTarget = bc(51.501, -0.1);
-        // New target is directly south of prevTarget
-        const newTarget = bc(51.5, -0.1); // back where we came from
-        const result = majorTurnDirection(fromPos, prevTarget, newTarget);
-        // 180° u-turn: delta normalises to ±180, which is > 90 or < -90
-        expect(result === 'turn right' || result === 'turn left').toBe(true);
-    });
-
-    it('returns null for a roughly 45° right diagonal (not a major turn)', () => {
-        // Walking north, then turning NE (~45° right) — not a major turn
-        const fromPos = bc(51.5, -0.1);
-        const prevTarget = bc(51.501, -0.1); // due north
-        const newTarget = bc(51.5017, -0.0895); // NE: roughly equal lat/lng change → ~45° turn
-        expect(majorTurnDirection(fromPos, prevTarget, newTarget)).toBeNull();
-    });
-
-    it('returns "turn right" for a south-east turn (>90° right)', () => {
-        // Walking north, then abruptly turning south-east
-        const fromPos = bc(51.5, -0.1);
-        const prevTarget = bc(51.502, -0.1); // north
-        const newTarget = bc(51.499, -0.07); // south-east of prevTarget → big right turn
-        expect(majorTurnDirection(fromPos, prevTarget, newTarget)).toBe('turn right');
     });
 });
 

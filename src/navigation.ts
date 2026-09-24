@@ -25,6 +25,8 @@ const MIN_WINDOW_CRUMBS = 2;
 const TURN_SIMPLIFY_TOLERANCE_M = 6;
 const TURN_MIN_ANGLE_DEG = 35;
 const TURN_MIN_LEG_M = 8;
+/** How many crumbs back a corner may lie and still count as not yet passed. */
+const RECENT_CORNER_CRUMBS = 3;
 
 const EMA_ALPHA = 0.2;
 const COMPASS_UPDATE_INTERVAL_MS = 100; // ~10fps
@@ -554,8 +556,31 @@ export function createNavigationService(): NavigationService {
         );
     }
 
+    /**
+     * A corner stays "next" until the walker is actually past it, not merely until its crumb
+     * counts as reached (which happens up to 15 m early). Otherwise the corner would vanish
+     * from view while the walker is still short of it.
+     */
+    function hasPassedCorner(pos: Breadcrumb, corner: number): boolean {
+        if (corner + 1 >= trail.length) return true;
+        return closestPointOnSegment(pos, trail[corner], trail[corner + 1]).t > 0;
+    }
+
     function nextTurn(pos: Breadcrumb): NextTurn | null {
         if (trail.length === 0 || currentIndex >= trail.length) return null;
+
+        // A corner whose crumb was just reached (the arrival zone can swallow a couple of crumbs
+        // at once), if the walker has not gone round it yet
+        const justReached = turns.find(
+            t =>
+                t.index < currentIndex &&
+                t.index >= currentIndex - RECENT_CORNER_CRUMBS &&
+                !hasPassedCorner(pos, t.index)
+        );
+        if (justReached) {
+            return { ...justReached, meters: haversineMeters(pos, trail[justReached.index]) };
+        }
+
         const turn = turns.find(t => t.index >= currentIndex);
         if (!turn) return null;
         return {

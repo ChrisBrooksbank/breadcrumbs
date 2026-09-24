@@ -193,12 +193,23 @@ Goal: glanceable "walk, track back". Decision (user): one screen, no separate Si
 - [x] Playwright e2e updated (selectors, and a database-version bug in its seed helper) and run: 10 screenshot tests pass on a Pixel 7 viewport, including new mid-route (turn ahead) and off-route screens. Screenshots reviewed by eye
 - [ ] Deferred: automated visual-regression comparison (the screenshots are captured and were reviewed manually, but nothing diffs them yet)
 
-### Phase 15: Turn-by-turn Feedback
+### Phase 15: Turn-by-turn Feedback - DONE
 
-- [ ] Speech with distance: "Turn left in 30 metres", "Continue 200 metres", "Off route, head back toward the trail"; keep the throttle but never drop arrival/off-route messages
-- [ ] Distinct haptic patterns for left, right, off-route, arrived (Android); audio tone equivalents for iOS and silent mode
-- [ ] Alert when GPS accuracy degrades or the app is backgrounded during navigation ("Keep the app open")
-- [ ] Tests for cue selection and throttling
+Goal: eyes-free guidance that says something useful, rarely.
+
+- [x] New `src/coach.ts` (`GuidanceCoach`, pure logic): given the navigation state on each fix it returns the cues to deliver, usually none. Speech, vibration pattern, tone and a priority (info / normal / critical) per cue
+- [x] Corners in stages: "In 100 metres, turn left" (100 m) -> "Turn left in 30 metres" (35 m, with the turn's buzz) -> "Turn left now" (12 m, firmer buzz). Each stage once; a corner first seen close skips the earlier stages; a turn over 120 degrees is "sharp"
+- [x] Distinct, learnable patterns: left = two short pulses, right = one long pulse, each with a firmer "now" version; separate patterns for off-route, back on route, weak GPS and arrival. Tone equivalents (left = two low tones, right = one high tone, alert = three) play when the browser cannot vibrate (iOS) or in silent mode
+- [x] Legs and progress: "Continue for 400 metres" once per leg when it is 120 m or more; remaining-distance milestones ("500 metres to go" at 1 km / 500 / 250 / 100 m), each once, none already-passed at the start, none right at the end
+- [x] Off route: once, with how far the route is ("Off the trail. The route is 60 metres away."), a reminder every 30 s, and "Back on the route"; nothing else is said while off. Arrival: once, always wins
+- [x] Gaps and weak GPS: "GPS was lost along this stretch..." once per stretch; "GPS signal is weak..." only after 15 s of poor fixes, at most once a minute. Weak signal is now reported via the GPS service's poor-accuracy hook (fixes over 30 m accuracy never reached navigation before, so it could not have been detected)
+- [x] `FeedbackService.cue()`: vibration always fires (also in silent mode); speech is skipped in silent mode; a critical cue interrupts speech in progress; normal cues are dropped within 2.5 s of other speech and info cues within 8 s, so nothing piles up; a dropped cue still buzzes
+- [x] Background alert: when the app is sent to the background mid-walk (unless in pocket mode) it speaks and buzzes "Keep it open on screen for directions", and on return after 10 s+ shows "Welcome back. Waiting for a fresh GPS fix"
+- [x] Removed the chatter: per-crumb "50 metres / 20 metres / almost there", the old off-route/back-on-track/arrival methods and the crumb-advance "turn left" (all replaced by coach cues), with their tests
+- [x] Fixed: a corner vanished from "next turn" up to 15 m before the walker reached it (its crumb counted as reached early), so "turn now" could never fire. A corner now stays next until the walker is round it
+- [x] Fixed: navigation sessions leaked (GPS, compass, background listener) when another began; `switchToNavigationView` now stops any session still running, like recording does
+- [ ] Not changed: the alignment pulse (a short buzz each time you face the right way) and the crumb-advance beep. Field testers said the haptics "felt great"; revisit if walkers find them too busy
+- [ ] Not done: spoken units other than metres/kilometres; other languages
 
 ### Phase 16: Structure and Maintainability
 

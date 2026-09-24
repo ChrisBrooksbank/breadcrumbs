@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { switchToNavigationView, _resetModalOpen } from './main';
 import { appendBreadcrumb, clearSession, getSession, listRoutes, deleteRoute } from './storage';
+import { HAPTIC } from './coach';
 import type { Breadcrumb } from './types';
 
 const ORIGIN = { lat: 51.5, lng: -0.1 };
@@ -33,6 +34,7 @@ describe('navigation guidance on screen', () => {
     let root: HTMLElement;
     let onPosition: PositionCallback;
     let clock = 10_000;
+    let vibrate: ReturnType<typeof vi.fn>;
 
     function fixAt(x: number, y: number, accuracy = 5): void {
         clock += 1000;
@@ -72,6 +74,7 @@ describe('navigation guidance on screen', () => {
         root = document.createElement('div');
         root.id = 'app';
         document.body.appendChild(root);
+        vibrate = vi.fn();
         vi.stubGlobal('navigator', {
             geolocation: {
                 watchPosition: vi.fn((success: PositionCallback) => {
@@ -80,6 +83,7 @@ describe('navigation guidance on screen', () => {
                 }),
                 clearWatch: vi.fn(),
             },
+            vibrate,
         });
         vi.stubGlobal('isSecureContext', true);
     });
@@ -415,6 +419,191 @@ describe('navigation guidance on screen', () => {
             expect(root.querySelector('#btn-take-me-back')).not.toBeNull();
             expect((await getSession())?.breadcrumbs).toHaveLength(1);
             await clearSession();
+        });
+    });
+
+    describe('what the walker hears and feels', () => {
+        let speak: ReturnType<typeof vi.fn>;
+        const said = (): string[] => speak.mock.calls.map(c => (c[0] as { text: string }).text);
+
+        /** One second passes, then a fix at (x, y): spoken cues are throttled by real time. */
+        function step(x: number, y: number, accuracy = 5): void {
+            vi.setSystemTime(Date.now() + 1000);
+            fixAt(x, y, accuracy);
+        }
+
+        beforeEach(() => {
+            vi.useRealTimers(); // earlier tests may have mocked the date
+            vi.useFakeTimers({ toFake: ['Date'] });
+            vi.setSystemTime(1_700_000_000_000);
+            localStorage.removeItem('breadcrumbs:silentMode');
+            speak = vi.fn();
+            Object.defineProperty(window, 'speechSynthesis', {
+                configurable: true,
+                value: { speak, cancel: vi.fn(), getVoices: () => [] },
+            });
+            vi.stubGlobal(
+                'SpeechSynthesisUtterance',
+                class {
+                    constructor(public text: string) {}
+                }
+            );
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+            localStorage.removeItem('breadcrumbs:silentMode');
+            delete (window as unknown as Record<string, unknown>).speechSynthesis;
+        });
+
+        // Saved route: 100 m north, then 100 m east (a right turn at the corner)
+        const lRoute = [...line(0, 0, 0, 100), ...line(0, 100, 100, 100).slice(1)];
+
+        it('announces a corner in stages, with the right buzz for the direction', async () => {
+            await start(lRoute, true);
+            for (let y = 0; y <= 100; y += 5) step(0, y);
+            await wait();
+
+            const turnCues = said().filter(t => /turn right/i.test(t));
+            expect(turnCues).toHaveLength(3);
+            expect(turnCues[0]).toMatch(/^In \d+ metres, turn right$/);
+            expect(turnCues[1]).toMatch(/^Turn right in \d+ metres$/);
+            expect(turnCues[2]).toBe('Turn right now');
+
+            const patterns = vibrate.mock.calls.map(c => c[0] as number[]);
+            expect(patterns).toContainEqual([...HAPTIC.right]);
+            expect(patterns).toContainEqual([...HAPTIC.rightNow]);
+            expect(patterns).not.toContainEqual([...HAPTIC.left]);
+        });
+
+        it('uses the left buzz for a left turn', async () => {
+            // North 100 m then WEST 100 m
+            await start([...line(0, 0, 0, 100), ...line(0, 100, -100, 100).slice(1)], true);
+            for (let y = 0; y <= 100; y += 5) step(0, y);
+            await wait();
+
+            expect(said().some(t => t.startsWith('Turn left in'))).toBe(true);
+            expect(vibrate.mock.calls.map(c => c[0] as number[])).toContainEqual([...HAPTIC.left]);
+        });
+
+        it('says nothing in silent mode but still buzzes', async () => {
+            localStorage.setItem('breadcrumbs:silentMode', 'true');
+            await start(lRoute, true);
+            for (let y = 0; y <= 100; y += 5) step(0, y);
+            await wait();
+
+            expect(speak).not.toHaveBeenCalled();
+            expect(vibrate.mock.calls.map(c => c[0] as number[])).toContainEqual([...HAPTIC.right]);
+        });
+
+        it('tells the walker they are off the trail, how far the route is, and when back', async () => {
+            await start(line(0, 0, 0, 200), true);
+            step(0, 0);
+            for (let i = 0; i < 4; i++) step(70, 60);
+            await wait();
+            expect(said()).toContain('Off the trail. The route is 70 metres away.');
+            expect(vibrate.mock.calls.map(c => c[0] as number[])).toContainEqual([
+                ...HAPTIC.offRoute,
+            ]);
+
+            step(3, 60); // back beside the path
+            await wait();
+            expect(said()).toContain('Back on the route');
+        });
+
+        it('announces arrival once', async () => {
+            await start(line(0, 0, 0, 40), true);
+            for (let y = 0; y <= 40; y += 5) step(0, y);
+            await wait();
+
+            expect(said().filter(t => t === "You've arrived")).toHaveLength(1);
+            expect(vibrate.mock.calls.map(c => c[0] as number[])).toContainEqual([
+                ...HAPTIC.arrived,
+            ]);
+        });
+
+        it('is not chatty over a long straight walk: no per-crumb distances', async () => {
+            await start(line(0, 0, 0, 400), true);
+            for (let y = 0; y <= 400; y += 5) step(0, y);
+            await wait();
+
+            const talk = said();
+            expect(talk.length).toBeLessThanOrEqual(6);
+            // The old per-crumb phrases are gone
+            expect(talk).not.toContain('50 metres');
+            expect(talk).not.toContain('20 metres');
+            expect(talk).not.toContain('almost there');
+            // ...but the useful ones remain
+            expect(talk[0]).toBe('Continue for 400 metres');
+            expect(talk).toContain('250 metres to go');
+            expect(talk[talk.length - 1]).toBe("You've arrived");
+        });
+
+        it('warns when GPS stays weak', async () => {
+            await start(line(0, 0, 0, 300), true);
+            step(0, 0); // one good fix, so the position is known
+            for (let i = 1; i < 20; i++) step(0, i, 70);
+            await wait();
+            expect(said()).toContain('GPS signal is weak. Directions may be less accurate.');
+        });
+
+        describe('when the app goes to the background', () => {
+            let visibility: 'visible' | 'hidden';
+
+            function setVisibility(next: 'visible' | 'hidden'): void {
+                visibility = next;
+                document.dispatchEvent(new Event('visibilitychange'));
+            }
+
+            beforeEach(() => {
+                visibility = 'visible';
+                Object.defineProperty(document, 'visibilityState', {
+                    configurable: true,
+                    get: () => visibility,
+                });
+            });
+
+            afterEach(() => {
+                delete (document as unknown as Record<string, unknown>).visibilityState;
+            });
+
+            it('warns, and welcomes the walker back once they return', async () => {
+                await start(line(0, 0, 0, 300), true);
+                step(0, 0);
+                speak.mockClear();
+                vibrate.mockClear();
+
+                setVisibility('hidden');
+                expect(said()).toContain(
+                    'The app is in the background. Keep it open on screen for directions.'
+                );
+                expect(vibrate).toHaveBeenCalled();
+
+                vi.setSystemTime(Date.now() + 30_000);
+                setVisibility('visible');
+                expect(text('#nav-recovery-hint')).toContain('Welcome back');
+            });
+
+            it('does not fuss over a brief glance away', async () => {
+                await start(line(0, 0, 0, 300), true);
+                step(0, 0);
+                setVisibility('hidden');
+                vi.setSystemTime(Date.now() + 3000);
+                setVisibility('visible');
+                expect(text('#nav-recovery-hint')).not.toContain('Welcome back');
+            });
+
+            it('stops watching once navigation has ended', async () => {
+                await start(line(0, 0, 0, 30), true);
+                for (let y = 0; y <= 30; y += 5) step(0, y);
+                await wait();
+                root.querySelector<HTMLButtonElement>('#btn-arrival-done')?.click();
+                await wait(80);
+                speak.mockClear();
+
+                setVisibility('hidden');
+                expect(speak).not.toHaveBeenCalled();
+            });
         });
     });
 

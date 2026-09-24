@@ -13,6 +13,8 @@
  *     into a single announcement fired after DIRECTION_DEBOUNCE_MS of quiet.
  */
 
+import type { Cue, ToneName } from '@/coach';
+
 export type Direction =
     | 'straight ahead'
     | 'turn right'
@@ -95,16 +97,6 @@ export function classifyDirectionWithHysteresis(
     return classifyDirection(bearingDelta);
 }
 
-/**
- * Distance thresholds in metres at which announcements are triggered.
- * Listed from largest to smallest.
- */
-const DISTANCE_THRESHOLDS: Array<{ maxMeters: number; phrase: string }> = [
-    { maxMeters: 50, phrase: '50 metres' },
-    { maxMeters: 20, phrase: '20 metres' },
-    { maxMeters: 5, phrase: 'almost there' },
-];
-
 export interface FeedbackService {
     /**
      * Speak a direction phrase with debouncing: rapid consecutive calls
@@ -113,30 +105,23 @@ export interface FeedbackService {
      * No-ops when speech is unavailable or silent mode is on.
      */
     speak(direction: Direction): void;
-    /** Speak an arbitrary phrase (e.g. distance announcement). */
+    /** Speak an arbitrary phrase. */
     announce(phrase: string): void;
     /**
-     * Announce distance milestones as the user approaches a breadcrumb.
-     * Speaks "50 metres", "20 metres", or "almost there" when the distance
-     * first crosses each threshold. Call resetDistanceAnnouncements() when
-     * advancing to the next breadcrumb.
+     * Deliver a guidance cue from the GuidanceCoach: speech, a vibration pattern and/or a tone.
+     *  - Vibration always fires (also in silent mode) when the browser supports it.
+     *  - Tones play when vibration is unavailable (iOS) or in silent mode, so tones + vibration
+     *    are the language-free channel; the arrival tone always plays.
+     *  - Speech is skipped in silent mode. A `critical` cue interrupts any speech in progress;
+     *    `normal` and `info` cues are dropped if speech was very recent, so nothing piles up.
      */
-    announceDistance(distanceMeters: number): void;
-    /** Reset distance milestone tracking (call when target breadcrumb changes). */
-    resetDistanceAnnouncements(): void;
+    cue(cue: Cue): void;
     /** Whether the Web Speech API is available in this environment. */
     readonly speechAvailable: boolean;
     /** Play a short confirmation beep when the user advances to the next breadcrumb. */
     playConfirmationBeep(): void;
     /** Play a proximity alert tone as the user approaches the target breadcrumb. */
     playProximityAlert(): void;
-    /**
-     * Play arrival feedback when navigation completes.
-     * - Spoken "You've arrived!" (suppressed in silent mode)
-     * - Distinct haptic triple-pulse `[200, 100, 200, 100, 200]` (always fires)
-     * - Lower-pitch confirmation tone (always fires)
-     */
-    playArrivalFeedback(): void;
     /** Whether the Web Audio API is available in this environment. */
     readonly audioAvailable: boolean;
     /**
@@ -156,19 +141,6 @@ export interface FeedbackService {
     vibrateProximity(distanceMeters: number): void;
     /** Whether the Vibration API is available in this environment. */
     readonly vibrationAvailable: boolean;
-    /**
-     * Play off-route feedback when the user strays > 30m from the trail.
-     * - Voice: recovery guidance (suppressed in silent mode)
-     * - Haptic: distinct pattern `[100, 50, 100, 50, 100]` (always fires)
-     * No-ops when speech/vibration are unavailable.
-     */
-    playOffRouteFeedback(): void;
-    /**
-     * Play back-on-track feedback when the user returns within 30m of the trail.
-     * - Voice: "Back on track" (suppressed in silent mode)
-     * No-ops when speech is unavailable.
-     */
-    playBackOnTrackFeedback(): void;
     /**
      * Play brief tap feedback (30ms vibrate + quiet tone) so elderly users
      * know a button press registered, especially on bright outdoor screens.
@@ -269,24 +241,54 @@ export function createFeedbackService(): FeedbackService {
         }
     }
 
+    /** Language-free tone patterns matching the vibration patterns. */
+    function playToneName(name: ToneName): void {
+        switch (name) {
+            case 'left': // two short low tones
+                playTone(520, 0.1, 0.4);
+                setTimeout(() => playTone(520, 0.1, 0.4), 160);
+                break;
+            case 'right': // one long high tone
+                playTone(740, 0.4, 0.4);
+                break;
+            case 'alert': // three quick lower tones
+                for (let i = 0; i < 3; i++) setTimeout(() => playTone(400, 0.12, 0.4), i * 180);
+                break;
+            case 'ok':
+                playTone(880, 0.12, 0.35);
+                break;
+            case 'arrive':
+                playTone(440, 0.6, 0.5);
+                break;
+        }
+    }
+
+    // When any cue last spoke, for dropping low-priority speech that would pile up
+    let lastCueSpeechTime = -Infinity;
+    const NORMAL_SPEECH_GAP_MS = 2500;
+    const INFO_SPEECH_GAP_MS = 8000;
+
+    function cue(c: Cue): void {
+        if (c.haptic) vibrate(c.haptic);
+
+        if (c.tone && (c.tone === 'arrive' || !vibrationAvailable || _silentMode)) {
+            playToneName(c.tone);
+        }
+
+        if (!c.speech || _silentMode || !speechAvailable) return;
+        const now = Date.now();
+        const sinceLast = now - lastCueSpeechTime;
+        if (c.priority === 'info' && sinceLast < INFO_SPEECH_GAP_MS) return;
+        if (c.priority === 'normal' && sinceLast < NORMAL_SPEECH_GAP_MS) return;
+        if (c.priority === 'critical') window.speechSynthesis.cancel();
+        lastCueSpeechTime = now;
+        announce(c.speech);
+    }
+
     function playProximityAlert(): void {
         // Single mid-range tone — indicates proximity
         playTone(660, 0.1, 0.3);
     }
-
-    function playArrivalFeedback(): void {
-        // Haptic + tone fire even in silent mode (celebratory arrival signal)
-        vibrate([200, 100, 200, 100, 200]);
-        // Lower-pitch, longer tone — distinct from breadcrumb-advance beep
-        playTone(440, 0.6, 0.5);
-        // Speech only when not in silent mode
-        if (!_silentMode) {
-            announce("You've arrived!");
-        }
-    }
-
-    // Tracks which threshold phrases have already been announced for the current target
-    const announced = new Set<string>();
 
     // Throttle state for direction (speak) announcements
     // Distance and one-off announcements (announce/announceDistance) are
@@ -324,37 +326,6 @@ export function createFeedbackService(): FeedbackService {
             lastSpeechTime = now;
             announce(direction);
         }, DIRECTION_DEBOUNCE_MS);
-    }
-
-    function announceDistance(distanceMeters: number): void {
-        for (const threshold of DISTANCE_THRESHOLDS) {
-            if (distanceMeters <= threshold.maxMeters && !announced.has(threshold.phrase)) {
-                announced.add(threshold.phrase);
-                announce(threshold.phrase);
-            }
-        }
-    }
-
-    function resetDistanceAnnouncements(): void {
-        announced.clear();
-    }
-
-    function playOffRouteFeedback(): void {
-        // Haptic fires even in silent mode — distinct off-route pattern
-        vibrate([100, 50, 100, 50, 100]);
-        // Speech only when not in silent mode
-        if (!_silentMode) {
-            announce(
-                "You're off the trail. Turn until the direction says straight, then walk back."
-            );
-        }
-    }
-
-    function playBackOnTrackFeedback(): void {
-        // Speech only when not in silent mode
-        if (!_silentMode) {
-            announce('Back on track');
-        }
     }
 
     function playButtonTap(): void {
@@ -426,15 +397,11 @@ export function createFeedbackService(): FeedbackService {
     return {
         speak,
         announce,
-        announceDistance,
-        resetDistanceAnnouncements,
+        cue,
         playButtonTap,
         cancelPending,
         playConfirmationBeep,
         playProximityAlert,
-        playArrivalFeedback,
-        playOffRouteFeedback,
-        playBackOnTrackFeedback,
         vibrateAlignment,
         resetAlignmentHysteresis,
         vibrateProximity,
