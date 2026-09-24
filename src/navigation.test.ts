@@ -4,6 +4,7 @@ import {
     createCompassService,
     smoothHeading,
     createPositionSmoother,
+    orientationToHeading,
 } from '@/navigation';
 import type { Breadcrumb } from '@/types';
 
@@ -813,5 +814,136 @@ describe('PositionSmoother', () => {
         const result = smoother.smoothed!;
         expect(result.accuracy).toBe(5);
         expect(result.timestamp).toBe(200);
+    });
+});
+
+describe('orientationToHeading', () => {
+    it('equals 360 - alpha with the phone flat', () => {
+        for (const alpha of [0, 45, 90, 180, 270, 315]) {
+            const heading = orientationToHeading(alpha, 0, 0);
+            expect(heading).not.toBeNull();
+            expect(shortestDelta(heading as number, (360 - alpha) % 360)).toBeLessThan(0.001);
+        }
+    });
+
+    it('gives the direction the back faces with the phone held upright', () => {
+        // Upright portrait (beta 90): the back camera looks along the heading
+        expect(shortestDelta(orientationToHeading(0, 90, 0) as number, 0)).toBeLessThan(0.001);
+        expect(shortestDelta(orientationToHeading(270, 90, 0) as number, 90)).toBeLessThan(0.001);
+        expect(shortestDelta(orientationToHeading(180, 90, 0) as number, 180)).toBeLessThan(0.001);
+        expect(shortestDelta(orientationToHeading(90, 90, 0) as number, 270)).toBeLessThan(0.001);
+    });
+
+    it('is steady through the tilt range of a phone held in front of a walker', () => {
+        // Facing east (alpha 270) at every tilt from flat to upright
+        for (const beta of [0, 20, 45, 60, 75, 90]) {
+            const heading = orientationToHeading(270, beta, 0) as number;
+            expect(shortestDelta(heading, 90)).toBeLessThan(0.001);
+        }
+    });
+
+    it('tolerates a little sideways roll while upright', () => {
+        const heading = orientationToHeading(270, 80, 10) as number;
+        expect(shortestDelta(heading, 90)).toBeLessThan(15);
+    });
+
+    it('returns null when face-down, where no direction is meaningful', () => {
+        expect(orientationToHeading(0, 180, 0)).toBeNull();
+    });
+
+    it('always returns a value in [0, 360)', () => {
+        for (const alpha of [0, 100, 359.9]) {
+            for (const beta of [-40, 0, 30, 89]) {
+                const heading = orientationToHeading(alpha, beta, 5);
+                if (heading !== null) {
+                    expect(heading).toBeGreaterThanOrEqual(0);
+                    expect(heading).toBeLessThan(360);
+                }
+            }
+        }
+    });
+});
+
+function shortestDelta(a: number, b: number): number {
+    const d = Math.abs(a - b) % 360;
+    return d > 180 ? 360 - d : d;
+}
+
+describe('CompassService – absolute orientation', () => {
+    function fire(type: string, detail: Record<string, unknown>): void {
+        window.dispatchEvent(Object.assign(new Event(type), detail));
+    }
+
+    afterEach(() => {
+        delete (window as unknown as Record<string, unknown>).ondeviceorientationabsolute;
+    });
+
+    it('listens to deviceorientationabsolute when the browser has it, and reports absolute', () => {
+        (window as unknown as Record<string, unknown>).ondeviceorientationabsolute = null;
+        const compass = createCompassService();
+        compass.start();
+
+        fire('deviceorientationabsolute', { alpha: 270, beta: 90, gamma: 0, absolute: true });
+
+        expect(compass.compassHeading).toBeCloseTo(90, 3);
+        expect(compass.absolute).toBe(true);
+        compass.stop();
+    });
+
+    it('ignores relative deviceorientation events when absolute ones are available', () => {
+        (window as unknown as Record<string, unknown>).ondeviceorientationabsolute = null;
+        const compass = createCompassService();
+        compass.start();
+
+        fire('deviceorientation', { alpha: 90, beta: 0, gamma: 0, absolute: false });
+
+        expect(compass.compassHeading).toBeNull();
+        compass.stop();
+    });
+
+    it('falls back to deviceorientation and reports a relative reading as not absolute', () => {
+        const compass = createCompassService();
+        compass.start();
+
+        fire('deviceorientation', { alpha: 90, beta: 0, gamma: 0, absolute: false });
+
+        expect(compass.compassHeading).toBeCloseTo(270, 3);
+        expect(compass.absolute).toBe(false);
+        compass.stop();
+    });
+
+    it('treats an iOS webkitCompassHeading as absolute', () => {
+        const compass = createCompassService();
+        compass.start();
+
+        fire('deviceorientation', { webkitCompassHeading: 45, alpha: 10 });
+
+        expect(compass.compassHeading).toBeCloseTo(45, 3);
+        expect(compass.absolute).toBe(true);
+        compass.stop();
+    });
+
+    it('has no absolute flag before the first reading', () => {
+        expect(createCompassService().absolute).toBeNull();
+    });
+
+    it('uses tilt so an upright phone still gives the facing direction', () => {
+        const compass = createCompassService();
+        compass.start();
+
+        fire('deviceorientation', { alpha: 270, beta: 90, gamma: 0, absolute: true });
+
+        expect(compass.compassHeading).toBeCloseTo(90, 3);
+        compass.stop();
+    });
+
+    it('skips a reading that has no meaningful direction', () => {
+        const compass = createCompassService();
+        compass.start();
+
+        fire('deviceorientation', { alpha: 0, beta: 180, gamma: 0, absolute: true });
+
+        expect(compass.compassHeading).toBeNull();
+        compass.stop();
     });
 });

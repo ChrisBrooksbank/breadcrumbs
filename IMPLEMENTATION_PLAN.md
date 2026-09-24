@@ -141,16 +141,18 @@ Goal: never lose or corrupt the trail. PWA-only: assume the app stays open in th
 - [ ] Explicit "Start walk" / "Set start here" control (auto-record on open is still the model; stale prompt covers the worst case). Revisit after field testing
 - [ ] Low-power stationary mode: `maximumAge` does not reduce GPS power, but switching to low-accuracy fixes risks false "movement" flapping. Left unchanged pending field data. iOS motion permission (`DeviceMotionEvent.requestPermission`) also still missing, so iOS never auto-suspends and shake-to-wake in pocket mode does not work there
 
-### Phase 12: Trustworthy Heading
+### Phase 12: Trustworthy Heading - DONE
 
 Goal: an arrow the user can believe.
 
-- [ ] Android: listen to `deviceorientationabsolute` (fall back to `deviceorientation` only when unavailable); compute heading with tilt compensation from alpha/beta/gamma plus screen orientation, not `360 - alpha`
-- [ ] Use GPS course-over-ground (`coords.heading` when present, else computed bearing) as the primary heading when speed > ~1 m/s; use the compass only when slow or stopped
-- [ ] Learn the compass-vs-GPS offset while moving (circular mean over a window) and apply it to the compass when stopped; replace the confidence-only blend in `heading-fusion.ts`
-- [ ] Show "compass unreliable" only when the offset is unstable; keep the calibration hint for iOS
-- [ ] Optional: apply magnetic declination so compass and GPS bearings share a reference (small offline lookup or a coarse model)
-- [ ] Tests: offset learning, moving/stopped switching, 0/360 wrap, tilt compensation
+- [x] Android: `CompassService` listens to `deviceorientationabsolute` when the browser has it (plain `deviceorientation` is relative on Chrome/Android) and exposes `absolute`; heading now comes from `orientationToHeading(alpha, beta, gamma)`, which combines the top-edge and back directions so it is correct flat, upright and in between (equals `360 - alpha` when flat). Manifest locked to portrait so screen rotation cannot skew it
+- [x] `heading-fusion.ts` rewritten: GPS course over ground (smoothed) is the heading while walking (>= 1 m/s, held 4 s); compass otherwise
+- [x] Learn the compass-vs-GPS offset (circular mean of the last 10 walking samples, needs 3) and apply it to the compass when stopped. This also absorbs magnetic declination, a phone carried at an angle, and a relative-only Android compass
+- [x] Compass reliability: offset spread > 35 deg means interference; the raw absolute compass is used as a fallback, a relative one is not used at all. Nav screen shows "Compass is unreliable here...", or "Walk a few steps so the arrow can find its bearings" for a relative compass that has not been calibrated yet
+- [x] `main.ts`: one `currentHeading()` helper (fused, else absolute compass, else GPS bearing) replaces four copies; the trail view now rotates by it; fixed a bug where a legitimate compass heading of exactly 0 (north) triggered "Waiting for direction"
+- [x] Tests: tilt maths, absolute/relative event handling, fusion (walking, learning, wraparound, interference, recovery), and navigation-screen integration (arrow follows GPS over a misleading compass, hints)
+- [ ] Not done: a magnetic declination model. The learned offset covers it once the user has walked a few steps; only the first few seconds before walking are affected (typically < 15 deg)
+- [ ] Not done: iOS tilt handling is left to `webkitCompassHeading`; verify on a real iPhone held upright
 
 ### Phase 13: Retrace Engine
 

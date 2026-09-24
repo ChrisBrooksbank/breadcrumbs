@@ -865,13 +865,22 @@ export function switchToNavigationView(
     // Trail renderer — initialised once breadcrumbs are loaded
     let trailRenderer: TrailRenderer | null = null;
 
+    /**
+     * Which way the user is facing: GPS course while walking, corrected compass when
+     * stopped. A relative-only compass is never used raw, since it has no north.
+     */
+    function currentHeading(): number | null {
+        const compassFallback = compass.absolute === false ? null : compass.compassHeading;
+        return fusion.fusedHeading ?? compassFallback ?? navGps.movementBearing;
+    }
+
     function renderTrail(): void {
         if (!trailRenderer || trailBreadcrumbs.length === 0) return;
         trailRenderer.render({
             trail: trailBreadcrumbs,
             currentIndex: nav.progress.currentIndex,
             currentPosition: currentPos,
-            compassHeading: compass.compassHeading,
+            compassHeading: currentHeading(),
             isOffRoute: nav.isOffRoute,
         });
     }
@@ -888,7 +897,7 @@ export function switchToNavigationView(
                 bearingToBreadcrumb = bearingDegrees(posForBearing, bearingTarget);
             }
         }
-        const heading = fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
+        const heading = currentHeading();
         if (bearingToBreadcrumb !== null && heading !== null) {
             const rawDeg = (bearingToBreadcrumb - heading + 360) % 360;
 
@@ -913,19 +922,27 @@ export function switchToNavigationView(
 
     function refreshCalibrationHint(): void {
         const hint = root.querySelector<HTMLElement>('#nav-calibration-hint');
-        if (hint) hint.hidden = !compass.needsCalibration;
+        if (!hint) return;
+        const unreliable = !fusion.compassReliable;
+        hint.hidden = !compass.needsCalibration && !unreliable;
+        if (compass.needsCalibration) {
+            hint.textContent = 'Move your phone in a figure-8 to calibrate compass';
+        } else if (compass.absolute === false && fusion.offset === null) {
+            hint.textContent = 'Walk a few steps so the arrow can find its bearings.';
+        } else {
+            hint.textContent = 'Compass is unreliable here. Keep walking and follow the arrow.';
+        }
     }
 
     compass.onHeadingChange = (heading: number) => {
         // Feed compass heading into fusion
-        fusion.updateCompass(heading);
+        fusion.updateCompass(heading, compass.absolute !== false);
 
         refreshArrow();
         refreshCalibrationHint();
         renderTrail();
 
-        const fusedHeading =
-            fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
+        const fusedHeading = currentHeading();
         if (bearingToBreadcrumb !== null && fusedHeading !== null) {
             const delta = bearingToBreadcrumb - fusedHeading;
             feedback.vibrateAlignment(delta);
@@ -1096,8 +1113,7 @@ export function switchToNavigationView(
                         const p = nav.progress;
                         updateNavProgress(root, p.currentIndex, p.total);
                         // Check for sustained off-course heading on GPS updates
-                        const headingForCheck =
-                            fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
+                        const headingForCheck = currentHeading();
                         if (bearingToBreadcrumb !== null && headingForCheck !== null) {
                             if (offCourseDetector.check(bearingToBreadcrumb - headingForCheck)) {
                                 feedback.speak("you're going the wrong way");
@@ -1141,7 +1157,7 @@ export function switchToNavigationView(
                         }
                     }
 
-                    if (!nav.isOffRoute && !compass.compassHeading && !navGps.movementBearing) {
+                    if (!nav.isOffRoute && currentHeading() === null) {
                         updateNavRecoveryHint(
                             root,
                             'Waiting for direction. Point your phone forward or walk a few steps.'
@@ -1151,8 +1167,7 @@ export function switchToNavigationView(
                     }
 
                     refreshArrow();
-                    const headingForSimple =
-                        fusion.fusedHeading ?? compass.compassHeading ?? navGps.movementBearing;
+                    const headingForSimple = currentHeading();
                     if (
                         getSimpleMode() &&
                         bearingToBreadcrumb !== null &&

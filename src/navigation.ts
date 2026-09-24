@@ -30,6 +30,48 @@ export function smoothHeading(raw: number, previous: number | null, alpha = EMA_
     return (((previous + alpha * diff) % 360) + 360) % 360;
 }
 
+function toRad(deg: number): number {
+    return (deg * Math.PI) / 180;
+}
+
+/**
+ * Compass heading (degrees clockwise from north, [0, 360)) of the direction the user is
+ * facing, from W3C DeviceOrientation angles. Works with the phone flat or held upright:
+ * the horizontal direction of the device's top edge (flat) and of its back (upright) are
+ * combined, so neither pose degenerates. Returns null when the phone is so nearly
+ * face-up/face-down and tilted that neither direction is meaningful.
+ *
+ * With beta = gamma = 0 this equals 360 - alpha.
+ */
+export function orientationToHeading(alpha: number, beta = 0, gamma = 0): number | null {
+    const a = toRad(alpha);
+    const b = toRad(beta);
+    const g = toRad(gamma);
+    const [sA, cA, sB, cB, sG, cG] = [
+        Math.sin(a),
+        Math.cos(a),
+        Math.sin(b),
+        Math.cos(b),
+        Math.sin(g),
+        Math.cos(g),
+    ];
+
+    let east = 0;
+    let north = 0;
+    // Top edge of the device (only while it is not tipped past vertical)
+    if (cB > 0) {
+        east += -sA * cB;
+        north += cA * cB;
+    }
+    // Back of the device
+    east += -(cA * sG + sA * sB * cG);
+    north += cA * sB * cG - sA * sG;
+
+    if (Math.hypot(east, north) < 0.05) return null;
+    const heading = (Math.atan2(east, north) * 180) / Math.PI;
+    return ((heading % 360) + 360) % 360;
+}
+
 export interface NavigationProgress {
     currentIndex: number;
     total: number;
@@ -62,15 +104,29 @@ export interface CompassService {
     start(): void;
     stop(): void;
     readonly compassHeading: number | null;
+    /**
+     * Whether headings are referenced to north: true (iOS, absolute events), false (relative
+     * `deviceorientation` only, so headings are offset by an unknown amount), null before
+     * the first reading.
+     */
+    readonly absolute: boolean | null;
     readonly needsCalibration: boolean;
     onHeadingChange: ((heading: number) => void) | null;
 }
 
 export function createCompassService(): CompassService {
     let compassHeading: number | null = null;
+    let absolute: boolean | null = null;
     let needsCalibration = false;
     let onHeadingChange: ((heading: number) => void) | null = null;
     let lastCallbackTime = -Infinity;
+
+    // Chrome on Android only reports north-referenced angles via the *absolute* event;
+    // plain `deviceorientation` there is relative to an arbitrary start direction.
+    const eventName =
+        typeof window !== 'undefined' && 'ondeviceorientationabsolute' in window
+            ? 'deviceorientationabsolute'
+            : 'deviceorientation';
 
     function handleOrientation(event: DeviceOrientationEventWithCompass): void {
         let rawHeading: number | null = null;
@@ -86,10 +142,12 @@ export function createCompassService(): CompassService {
             } else {
                 needsCalibration = false;
             }
+            absolute = true;
         } else if (event.alpha !== null && event.alpha !== undefined) {
-            // Android: alpha is degrees from north (0-360, counterclockwise)
-            // Convert to clockwise compass heading
-            rawHeading = (360 - event.alpha) % 360;
+            // Android: derive a clockwise heading from alpha/beta/gamma so it stays correct
+            // when the phone is held upright, not just flat.
+            rawHeading = orientationToHeading(event.alpha, event.beta ?? 0, event.gamma ?? 0);
+            absolute = eventName === 'deviceorientationabsolute' ? true : (event.absolute ?? null);
             needsCalibration = false;
         }
 
@@ -107,11 +165,11 @@ export function createCompassService(): CompassService {
     }
 
     function start(): void {
-        window.addEventListener('deviceorientation', handleOrientation as EventListener);
+        window.addEventListener(eventName, handleOrientation as EventListener);
     }
 
     function stop(): void {
-        window.removeEventListener('deviceorientation', handleOrientation as EventListener);
+        window.removeEventListener(eventName, handleOrientation as EventListener);
     }
 
     return {
@@ -119,6 +177,9 @@ export function createCompassService(): CompassService {
         stop,
         get compassHeading() {
             return compassHeading;
+        },
+        get absolute() {
+            return absolute;
         },
         get needsCalibration() {
             return needsCalibration;
