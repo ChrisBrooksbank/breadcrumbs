@@ -26,7 +26,7 @@ import {
     saveRoute,
     deleteRoute,
 } from './storage';
-import { initSettings, setFontSize, FONT_SIZES } from './settings';
+import { setFontSize, FONT_SIZES } from './settings';
 
 describe('App Shell', () => {
     let root: HTMLElement;
@@ -355,10 +355,11 @@ describe('startRecording', () => {
         _resetModalOpen();
     });
 
-    it('recording stats are hidden before first breadcrumb', () => {
+    it('shows zeroed recording stats before the first breadcrumb', () => {
         startRecording(root);
-        const stats = root.querySelector<HTMLElement>('#recording-stats');
-        expect(stats?.hidden).toBe(true);
+        expect(root.querySelector<HTMLElement>('#recording-stats')?.hidden).toBe(false);
+        expect(root.querySelector('#elapsed-time')?.textContent).toBe('0:00');
+        expect(root.querySelector('#distance-walked')?.textContent).toBe('0 m');
     });
 
     it('recording stats become visible after first breadcrumb', async () => {
@@ -581,13 +582,29 @@ describe('mountNavigationView', () => {
         expect(arrow?.classList.contains('nav-compass-arrow')).toBe(true);
     });
 
-    it('distance and progress are inside nav-primary (primary content area)', () => {
-        const primary = root.querySelector('.nav-primary');
-        expect(primary).not.toBeNull();
-        const distanceEl = primary?.querySelector('#nav-distance-value');
-        const progressEl = primary?.querySelector('#nav-progress-text');
-        expect(distanceEl).not.toBeNull();
-        expect(progressEl).not.toBeNull();
+    it('direction, distance and progress are all in the instrument panel above the map', () => {
+        const panel = root.querySelector('.nav-panel');
+        expect(panel).not.toBeNull();
+        expect(panel?.querySelector('#nav-direction')).not.toBeNull();
+        expect(panel?.querySelector('#nav-distance-value')).not.toBeNull();
+        expect(panel?.querySelector('#nav-progress-text')).not.toBeNull();
+        // ...and the panel comes before the trail so it never covers the map
+        const trail = root.querySelector('.nav-trail-container');
+        expect(
+            panel!.compareDocumentPosition(trail!) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+    });
+
+    it('there is one navigation layout: no separate simple screen', () => {
+        expect(root.querySelector('#simple-nav')).toBeNull();
+        expect(root.querySelector('.nav-trail-canvas')).not.toBeNull();
+        expect(root.querySelector('#nav-direction')).not.toBeNull();
+    });
+
+    it('offers zoom controls, with Auto hidden until zoom is manual', () => {
+        expect(root.querySelector('#nav-zoom-in')).not.toBeNull();
+        expect(root.querySelector('#nav-zoom-out')).not.toBeNull();
+        expect(root.querySelector<HTMLElement>('#nav-zoom-auto')?.hidden).toBe(true);
     });
 
     it('nav-compass-corner is inside nav-trail-container (overlaid on the trail canvas)', () => {
@@ -1529,25 +1546,24 @@ describe('Accessibility controls bar', () => {
         expect(btn?.disabled).toBe(true);
     });
 
-    it('re-renders the recording layout when simple mode is toggled', () => {
-        localStorage.setItem('breadcrumbs:simpleMode', 'true');
-        initSettings();
-        vi.stubGlobal('navigator', {
-            geolocation: {
-                watchPosition: vi.fn(() => 1),
-                clearWatch: vi.fn(),
-            },
-        });
-        vi.stubGlobal('isSecureContext', true);
-
+    it('keeps the text and theme controls tucked away until Display is pressed', () => {
         mountAppShell(root);
-        expect(root.querySelector('.simple-recording-main')).not.toBeNull();
+        const toggle = root.querySelector<HTMLButtonElement>('#btn-display-toggle');
+        const panel = root.querySelector<HTMLElement>('#a11y-panel');
+        expect(panel?.hidden).toBe(true);
+        expect(toggle?.getAttribute('aria-expanded')).toBe('false');
 
-        root.querySelector<HTMLButtonElement>('#btn-simple-mode')?.click();
+        toggle?.click();
+        expect(panel?.hidden).toBe(false);
+        expect(toggle?.getAttribute('aria-expanded')).toBe('true');
 
-        expect(root.querySelector('.simple-recording-main')).toBeNull();
-        expect(root.querySelector('.recording-main')).not.toBeNull();
-        expect(navigator.geolocation.watchPosition).toHaveBeenCalled();
+        toggle?.click();
+        expect(panel?.hidden).toBe(true);
+    });
+
+    it('has no simple-mode switch any more', () => {
+        mountAppShell(root);
+        expect(root.querySelector('#btn-simple-mode')).toBeNull();
     });
 });
 

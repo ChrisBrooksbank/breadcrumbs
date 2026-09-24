@@ -11,7 +11,6 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 
 const FONT_SIZE_KEY = 'breadcrumbs:fontSize';
 const THEME_MODE_KEY = 'breadcrumbs:themeMode';
-const SIMPLE_MODE_KEY = 'breadcrumbs:simpleMode';
 
 const DEFAULT_FONT_SIZE: FontSize = 16;
 const DEFAULT_THEME_MODE: ThemeMode = 'system';
@@ -21,7 +20,6 @@ const DARK_THEME_COLOR = '#1e3a5f';
 
 let currentFontSize: FontSize = DEFAULT_FONT_SIZE;
 let currentThemeMode: ThemeMode = DEFAULT_THEME_MODE;
-let currentSimpleMode = false;
 let mediaQuery: MediaQueryList | null = null;
 let mediaListener: ((e: MediaQueryListEvent) => void) | null = null;
 
@@ -98,21 +96,6 @@ export function decreaseFontSize(): FontSize {
     return currentFontSize;
 }
 
-export function getSimpleMode(): boolean {
-    return currentSimpleMode;
-}
-
-function setSimpleMode(enabled: boolean): void {
-    currentSimpleMode = enabled;
-    writeStorage(SIMPLE_MODE_KEY, enabled);
-    document.documentElement.dataset.simpleMode = enabled ? 'true' : 'false';
-}
-
-export function toggleSimpleMode(): boolean {
-    setSimpleMode(!currentSimpleMode);
-    return currentSimpleMode;
-}
-
 export function getThemeMode(): ThemeMode {
     return currentThemeMode;
 }
@@ -142,10 +125,6 @@ export function initSettings(): void {
     if (mediaQuery && mediaListener) {
         mediaQuery.removeEventListener('change', mediaListener);
     }
-
-    const storedSimple = readStorage<unknown>(SIMPLE_MODE_KEY, true);
-    currentSimpleMode = storedSimple !== false;
-    document.documentElement.dataset.simpleMode = currentSimpleMode ? 'true' : 'false';
 
     mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     mediaListener = () => {

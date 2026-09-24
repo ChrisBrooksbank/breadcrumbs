@@ -198,65 +198,6 @@ main {
 
 /* ── Compact recording layout (no header/footer, fits viewport) ── */
 
-.recording-main {
-    flex: 1;
-    padding: 1rem;
-    max-width: min(600px, 100vw);
-    margin: 0 auto;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 0.75rem;
-    min-width: 0;
-}
-
-.recording-compact {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem;
-    background: var(--color-surface);
-    border-radius: 12px;
-    box-shadow: 0 2px 8px var(--color-surface-shadow);
-    width: 100%;
-    min-width: 0;
-}
-
-.recording-compact__status {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    justify-content: center;
-}
-
-.recording-compact__stats {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    justify-content: center;
-}
-
-.recording-compact__time {
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--color-stat-value);
-    line-height: 1;
-}
-
-.recording-compact__sep {
-    font-size: 1.5rem;
-    color: var(--color-text-muted);
-}
-
-.recording-compact__dist {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: var(--color-text-muted);
-}
-
 .card {
     background: var(--color-surface);
     border-radius: 12px;
@@ -384,15 +325,6 @@ main {
     min-width: 0;
 }
 
-.actions-row {
-    display: flex;
-    gap: 0.75rem;
-}
-
-.actions-row > .btn {
-    flex: 1;
-}
-
 .btn {
     display: flex;
     align-items: center;
@@ -494,24 +426,6 @@ footer .btn {
     min-height: 0;
 }
 
-.nav-view {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    flex: 1;
-    min-height: 0;
-}
-
-.nav-primary {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 100%;
-    flex: 1;
-    min-height: 0;
-}
-
 .nav-compass-corner {
     position: absolute;
     top: 0;
@@ -595,37 +509,6 @@ footer .btn {
 }
 
 /* Overlay: distance + progress text on top of the canvas */
-.nav-trail-overlay {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    padding: 0.5rem 0.75rem;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.45));
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.125rem;
-    pointer-events: none;
-}
-
-.nav-trail-overlay .nav-distance-value {
-    font-size: 2.25rem;
-    color: #ffffff;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
-}
-
-.nav-trail-overlay .nav-distance-label {
-    color: rgba(255, 255, 255, 0.85);
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-}
-
-.nav-trail-overlay .nav-progress {
-    font-size: 1rem;
-    color: rgba(255, 255, 255, 0.9);
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-}
-
 .nav-recovery-hint {
     max-width: min(92vw, 520px);
     padding: 0.4rem 0.65rem;
@@ -911,6 +794,19 @@ footer .btn {
     min-width: 0;
 }
 
+.a11y-controls__panel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.a11y-controls__panel[hidden] {
+    display: none;
+}
+
 .a11y-controls__group {
     display: flex;
     align-items: center;
@@ -1145,41 +1041,52 @@ footer .btn {
     transition: width 1s linear;
 }
 
-/* ── Simple Mode ── */
+/* ── Home (recording) screen ── */
 
-/* Status bar at top of simple recording screen */
-.simple-status-bar {
+/* Status bar across the top: grey idle, green recording, red error */
+.home-status-bar {
     height: 6px;
     width: 100%;
     transition: background-color 0.3s ease;
 }
 
-.simple-status-bar--idle {
+.home-status-bar--idle {
     background: var(--color-status-idle-bg);
 }
 
-.simple-status-bar--recording {
+.home-status-bar--recording {
     background: #15803d;
 }
 
-.simple-status-bar--error {
+.home-status-bar--error {
     background: #b91c1c;
 }
 
-/* Simple recording main layout */
-.simple-recording-main {
+.home-main {
     flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
     padding: 0.75rem;
     gap: 0.75rem;
+    width: 100%;
+    max-width: min(600px, 100vw);
+    margin: 0 auto;
     min-width: 0;
+    min-height: 0;
     overflow-x: hidden;
 }
 
-.simple-stats {
+.home-status-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-width: 0;
+}
+
+.home-stats {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1187,24 +1094,30 @@ footer .btn {
     min-width: 0;
 }
 
-.simple-stats__time {
+.home-stats__time {
     font-size: 3rem;
     font-weight: 700;
     color: var(--color-text-heading);
     line-height: 1;
 }
 
-.simple-stats__distance {
+.home-stats__distance {
     font-size: 2rem;
     font-weight: 600;
     color: var(--color-text-muted);
 }
 
-/* "TAKE ME BACK" button — large but not overwhelming */
-.simple-take-me-back {
-    width: 90%;
+/* The actions fill the rest of the screen, with "Take me back" taking the room */
+.home-main .actions {
     flex: 1;
-    max-height: 40vh;
+    min-height: 0;
+}
+
+/* "TAKE ME BACK": the one thing this screen is for, so it is big and obvious */
+.home-take-me-back {
+    width: 100%;
+    flex: 1;
+    min-height: 120px;
     border: none;
     border-radius: 20px;
     background: var(--color-primary);
@@ -1212,6 +1125,7 @@ footer .btn {
     font-size: min(2.5rem, 48px);
     font-weight: 900;
     line-height: 1.08;
+    text-transform: uppercase;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
@@ -1220,124 +1134,149 @@ footer .btn {
         transform 0.1s ease;
 }
 
-.simple-take-me-back:active {
+.home-take-me-back:active {
     transform: scale(0.98);
     opacity: 0.9;
 }
 
-.simple-take-me-back:disabled {
+.home-take-me-back:disabled {
     background: #b7c7f4;
     color: #ffffff;
     cursor: not-allowed;
     transform: none;
 }
 
-[data-theme='dark'] .simple-take-me-back:disabled {
+[data-theme='dark'] .home-take-me-back:disabled {
     background: #1e3a8a;
     color: #ffffff;
 }
 
-.simple-take-me-back:focus-visible {
+.home-take-me-back:focus-visible {
     outline: 4px solid var(--color-focus-ring);
     outline-offset: 4px;
 }
 
-/* Bottom row in simple mode (More + Saved routes side by side) */
-.simple-bottom-row {
+.home-actions-row {
     display: flex;
     gap: 0.75rem;
-    width: 90%;
+    width: 100%;
 }
 
-.simple-bottom-row .btn {
+.home-actions-row .btn {
     flex: 1;
-    min-height: 48px;
+    min-height: 56px;
 }
 
-.simple-more-panel {
+.home-more-panel {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    width: 90%;
+    width: 100%;
 }
 
-.simple-more-panel[hidden],
+.home-more-panel[hidden],
 #btn-location-retry[hidden] {
     display: none;
 }
 
-.simple-location-retry {
+.home-location-retry {
     width: 90%;
 }
 
-/* ── Simple Navigation ── */
+/* ── Navigation screen: instrument panel above a heading-up trail ── */
 
-.simple-nav {
-    flex: 1;
+.nav-panel {
+    flex: none;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    padding: 1.5rem;
-    gap: 1rem;
+    gap: 0.35rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 12px;
+    color: #ffffff;
+    text-align: center;
     transition: background-color 0.4s ease;
-    min-height: 0;
 }
 
-.simple-nav--on-track {
+/* State colours always come with words (the direction text), never colour alone */
+.nav-panel--idle {
+    background: #374151;
+}
+
+.nav-panel--on-track {
     background: #15803d;
-    color: white;
 }
 
-.simple-nav--turn {
+.nav-panel--turn {
     background: #92400e;
-    color: white;
 }
 
-.simple-nav--wrong {
+.nav-panel--wrong {
     background: #b91c1c;
-    color: white;
 }
 
-.simple-nav__direction {
-    font-size: 5rem;
+.nav-direction {
+    font-size: clamp(1.6rem, 9vw, 2.75rem);
     font-weight: 900;
-    text-align: center;
     line-height: 1.1;
-}
-
-.simple-nav__distance {
-    font-size: 4rem;
-    font-weight: 700;
-    text-align: center;
-}
-
-.simple-nav__label {
-    font-size: 1.5rem;
-    font-weight: 600;
-    text-align: center;
-    opacity: 0.7;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
 }
 
-.simple-nav__progress {
-    font-size: 1.25rem;
-    font-weight: 600;
-    text-align: center;
-    opacity: 0.85;
+.nav-panel .nav-distance-display {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0.6rem;
 }
 
-/* In simple nav, make footer buttons visible against colored backgrounds */
-.simple-nav ~ footer .btn {
-    background: rgba(255, 255, 255, 0.2);
-    color: white;
-    border-color: rgba(255, 255, 255, 0.4);
+.nav-panel .nav-distance-value {
+    font-size: clamp(2.5rem, 14vw, 4rem);
+    color: #ffffff;
 }
 
-/* Hide full a11y controls in simple mode (except the simple toggle itself) */
-[data-simple-mode='true'] .a11y-controls__group:not(:last-child) {
+.nav-panel .nav-distance-label {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.nav-panel .nav-progress {
+    font-size: 1rem;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+/* Zoom buttons sit in the bottom-left corner, away from the user marker */
+.nav-zoom {
+    position: absolute;
+    left: 0.5rem;
+    bottom: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.nav-zoom__btn {
+    min-width: 48px;
+    min-height: 48px;
+    border-radius: 12px;
+    border: 2px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text-heading);
+    font-size: 1.5rem;
+    font-weight: 800;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.nav-zoom__btn--auto {
+    font-size: 0.9rem;
+}
+
+.nav-zoom__btn[hidden] {
     display: none;
+}
+
+.nav-zoom__btn:focus-visible {
+    outline: 3px solid var(--color-focus-ring);
+    outline-offset: 2px;
 }
 
 /* ── Delayed confirm button (destructive dialog protection) ── */

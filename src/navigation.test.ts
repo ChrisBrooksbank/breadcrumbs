@@ -1156,6 +1156,22 @@ describe('NavigationService – GPS gaps', () => {
 
     it('is false with nothing loaded', () => {
         expect(createNavigationService().inGap).toBe(false);
+        expect(createNavigationService().gapSegments).toEqual([]);
+    });
+
+    it('lists the gap segments by trail index, mirrored when retracing', () => {
+        const a = offsetCrumb(0, 0);
+        const b = offsetCrumb(0, 30);
+        const c = { ...offsetCrumb(0, 200), gap: true }; // gap lies between b and c
+        const d = offsetCrumb(0, 230);
+
+        const forward = createNavigationService();
+        forward.loadForward([a, b, c, d]);
+        expect(forward.gapSegments).toEqual([1]); // b -> c
+
+        const back = createNavigationService();
+        back.load([a, b, c, d]); // trail: d, c, b, a
+        expect(back.gapSegments).toEqual([1]); // c -> b
     });
 });
 

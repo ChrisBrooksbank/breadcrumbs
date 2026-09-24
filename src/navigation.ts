@@ -161,6 +161,8 @@ export interface NavigationService {
     readonly trail: readonly Breadcrumb[];
     /** True while walking a stretch where GPS was lost when it was recorded (a guessed line). */
     readonly inGap: boolean;
+    /** Indices k of trail segments (trail[k] to trail[k + 1]) recorded across a GPS gap. */
+    readonly gapSegments: readonly number[];
     /** Corners along the trail, in walking order. */
     readonly turns: readonly TurnPoint[];
     /** Path distance still to walk from `pos` to the end of the trail (0 once arrived). */
@@ -335,6 +337,7 @@ export function createNavigationService(): NavigationService {
     /** cumulative[i] = path metres from trail[0] to trail[i]. */
     let cumulative: number[] = [];
     let turns: TurnPoint[] = [];
+    let gapSegments: number[] = [];
     let currentIndex = 0;
     /** Retrace (true): the trail end is where the user started, so being near it means arrived. */
     let retraceMode = true;
@@ -357,6 +360,10 @@ export function createNavigationService(): NavigationService {
             );
         }
         turns = findTurns(trail);
+        gapSegments = [];
+        for (let k = 0; k < trail.length - 1; k++) {
+            if (isGapSegment(k)) gapSegments.push(k);
+        }
     }
 
     function load(breadcrumbs: Breadcrumb[]): void {
@@ -592,6 +599,9 @@ export function createNavigationService(): NavigationService {
         nearestPathPoint,
         get trail(): readonly Breadcrumb[] {
             return trail;
+        },
+        get gapSegments(): readonly number[] {
+            return gapSegments;
         },
         get inGap(): boolean {
             return isGapSegment(currentIndex - 1);

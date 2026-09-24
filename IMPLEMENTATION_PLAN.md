@@ -180,15 +180,18 @@ Goal: get back correctly, including loops and out-and-back routes. Decision (use
 - The single-seed "arrives 62 m away with weak GPS" failure from Phase 10 was mostly a noise floor: at 20 m accuracy both the recorded start and the returning fix can each be 25-30 m off. Over 40 seeds arrival is always reached; p90 distance to the true start is ~25 m at 8 m accuracy and ~3x accuracy at 20 m. Tests now assert those limits instead of a single seed
 - The real premature-arrival mechanisms were unbounded skip-ahead and a lingering rejoin flag that snapped to the final segment; both are fixed and covered
 
-### Phase 14: Garmin-style Single Screen
+### Phase 14: One Garmin-style Screen - DONE (one item deferred)
 
-Goal: glanceable "walk, track back".
+Goal: glanceable "walk, track back". Decision (user): one screen, no separate Simple mode, to reduce confusion.
 
-- [ ] Redesign the trail view: user fixed near bottom-centre, heading-up, rotate about the user (not canvas centre), fixed zoom showing the next ~100-200 m with +/- zoom buttons and auto-zoom only as a fallback
-- [ ] Big "distance to start" as the primary number; next-turn arrow with distance as secondary; small compass as tertiary
-- [ ] One primary "Take me back" / "I'm back" flow; fold Simple and Full into one adaptive layout (keep font scaling and high-contrast themes)
-- [ ] Larger canvas text (min 16px), accessible colours (contrast >= 4.5:1), off-route state not colour-only
-- [ ] Visual regression screenshots (Playwright) for home, recording, returning, off-route, arrived
+- [x] Simple mode removed everywhere (setting, storage key, toggle, duplicate views, CSS). There is now one home screen and one navigation screen
+- [x] Home: a huge **Take me back** button that takes the spare room, zeroed time/distance always shown, then a row **Save route | Landmark** and a row **Saved routes | More...**; **New route** (destructive) lives behind More. Text size and theme controls are tucked behind a single **Aa Display** button
+- [x] Navigation: an instrument panel above the map (never covering it) with the big direction word (STRAIGHT / TURN LEFT / TURN RIGHT / BEHIND YOU / ARRIVED), distance to start/finish, next-turn pill, progress and hints. The panel is green on track, amber for a turn, red when behind you or off the route, and always carries words, not just colour
+- [x] `trail-renderer.ts` rewritten Garmin-style: the user is fixed near the bottom-centre and the world rotates about them so ahead is up; auto zoom shows the next ~150 m of path (never less than 40 m ahead); + / - zoom buttons with an Auto button to hand control back; dashed orange line for stretches recorded without GPS; dashed red guide from the user to the nearest point of the route when off it; landmark labels stay upright; the user dot is always on top
+- [x] Fixed: the leg being walked was drawn grey (as already walked); it is now blue, and only what lies behind the last reached crumb is grey
+- [x] Fixed: the arrival screen kept showing "Waiting for direction"
+- [x] Playwright e2e updated (selectors, and a database-version bug in its seed helper) and run: 10 screenshot tests pass on a Pixel 7 viewport, including new mid-route (turn ahead) and off-route screens. Screenshots reviewed by eye
+- [ ] Deferred: automated visual-regression comparison (the screenshots are captured and were reviewed manually, but nothing diffs them yet)
 
 ### Phase 15: Turn-by-turn Feedback
 

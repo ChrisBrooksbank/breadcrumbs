@@ -1,6 +1,6 @@
 import './styles.css';
 import { createGeolocationService } from '@/gps';
-import { createTrailRenderer } from '@/trail-renderer';
+import { createTrailRenderer, ZOOM_RANGES_METERS } from '@/trail-renderer';
 import type { TrailRenderer } from '@/trail-renderer';
 import {
     appendBreadcrumb,
@@ -29,8 +29,6 @@ import {
     decreaseFontSize,
     getThemeMode,
     setThemeMode,
-    getSimpleMode,
-    toggleSimpleMode,
     FONT_SIZES,
 } from '@/settings';
 import type { ThemeMode } from '@/settings';
@@ -61,7 +59,6 @@ function renderSimulatorControls(): string {
 function renderA11yControls(): string {
     const size = getFontSize();
     const mode = getThemeMode();
-    const simple = getSimpleMode();
     const minDisabled = size === FONT_SIZES[0] ? 'disabled' : '';
     const maxDisabled = size === FONT_SIZES[FONT_SIZES.length - 1] ? 'disabled' : '';
 
@@ -70,7 +67,11 @@ function renderA11yControls(): string {
     }
 
     return `
-        <div class="a11y-controls" role="toolbar" aria-label="Accessibility controls">
+        <div class="a11y-controls" role="toolbar" aria-label="Display controls">
+            <button class="a11y-controls__btn a11y-controls__toggle" id="btn-display-toggle" aria-expanded="false" aria-controls="a11y-panel" aria-label="Display settings: text size and theme">
+                Aa Display
+            </button>
+            <div class="a11y-controls__panel" id="a11y-panel" hidden>
             <div class="a11y-controls__group">
                 <span class="a11y-controls__label">Text</span>
                 <button class="a11y-controls__btn" id="btn-font-down" aria-label="Decrease font size" ${minDisabled}>A-</button>
@@ -82,14 +83,21 @@ function renderA11yControls(): string {
                 <button class="a11y-controls__btn" id="btn-theme-dark" aria-label="Dark theme" ${pressed('dark')}>Night</button>
                 <button class="a11y-controls__btn" id="btn-theme-system" aria-label="System theme" ${pressed('system')}>Auto</button>
             </div>
-            <div class="a11y-controls__group">
-                <button class="a11y-controls__btn" id="btn-simple-mode" aria-label="Toggle simple mode" aria-pressed="${simple}">${simple ? 'Simple: On' : 'Simple: Off'}</button>
             </div>
         </div>
     `;
 }
 
 function wireA11yControls(root: HTMLElement): void {
+    const displayToggle = root.querySelector<HTMLButtonElement>('#btn-display-toggle');
+    const displayPanel = root.querySelector<HTMLElement>('#a11y-panel');
+    displayToggle?.addEventListener('click', () => {
+        if (!displayPanel) return;
+        const opening = displayPanel.hidden;
+        displayPanel.hidden = !opening;
+        displayToggle.setAttribute('aria-expanded', String(opening));
+    });
+
     const fontDown = root.querySelector<HTMLButtonElement>('#btn-font-down');
     const fontUp = root.querySelector<HTMLButtonElement>('#btn-font-up');
 
@@ -130,21 +138,6 @@ function wireA11yControls(root: HTMLElement): void {
         });
     }
 
-    const simpleBtn = root.querySelector<HTMLButtonElement>('#btn-simple-mode');
-    if (simpleBtn) {
-        simpleBtn.addEventListener('click', () => {
-            const isOn = toggleSimpleMode();
-            simpleBtn.setAttribute('aria-pressed', String(isOn));
-            simpleBtn.textContent = isOn ? 'Simple: On' : 'Simple: Off';
-            if (root.querySelector('#btn-stop-navigation')) {
-                switchToNavigationView(root);
-            } else {
-                mountAppShell(root);
-                startRecording(root);
-            }
-        });
-    }
-
     root.querySelector<HTMLButtonElement>('#btn-sim-walk')?.addEventListener('click', () => {
         window.__breadcrumbsSimulator?.startWalk();
     });
@@ -157,46 +150,51 @@ function wireA11yControls(root: HTMLElement): void {
 }
 
 export function mountAppShell(root: HTMLElement): void {
-    const simple = getSimpleMode();
-    root.innerHTML = simple ? renderSimpleRecordingView() : renderFullRecordingView();
+    root.innerHTML = renderRecordingView();
     wireA11yControls(root);
 }
 
-function renderFullRecordingView(): string {
+function renderRecordingView(): string {
     return `
+        <div class="home-status-bar home-status-bar--idle" id="home-status-bar" aria-live="polite"></div>
         ${renderA11yControls()}
         ${renderSimulatorControls()}
-        <main class="recording-main">
-            <div class="recording-compact" id="recording-status-card">
-                <div class="recording-compact__status">
-                    <span class="status-badge status-badge--idle" id="status-badge" aria-live="polite">
-                        <span class="status-dot" aria-hidden="true"></span>
-                        <span id="status-text">Idle</span>
-                    </span>
-                    <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
-                        Stationary
-                    </div>
+        <main class="home-main">
+            <div class="home-status-card" id="recording-status-card">
+                <div class="home-stats" id="recording-stats" aria-live="polite">
+                    <span class="home-stats__time" id="elapsed-time">0:00</span>
+                    <span class="home-stats__distance" id="distance-walked">0 m</span>
                 </div>
-                <div class="recording-compact__stats" id="recording-stats" aria-live="polite" hidden>
-                    <span class="recording-compact__time" id="elapsed-time">0:00</span>
-                    <span class="recording-compact__sep" aria-hidden="true">&middot;</span>
-                    <span class="recording-compact__dist" id="distance-walked">0 m</span>
+                <span class="status-badge status-badge--idle" id="status-badge" aria-live="polite">
+                    <span class="status-dot" aria-hidden="true"></span>
+                    <span id="status-text">Idle</span>
+                </span>
+                <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
+                    Stationary
                 </div>
                 <p class="route-quality route-quality--hidden" id="route-quality" aria-live="polite"></p>
                 <p class="keep-open-hint" id="keep-open-hint" hidden>
                     Keep this app open with the screen on, or the route may stop recording.
                 </p>
+                <button
+                    class="btn btn--secondary home-location-retry"
+                    id="btn-location-retry"
+                    aria-label="Try location again"
+                    hidden
+                >
+                    Try location again
+                </button>
             </div>
             <div class="actions" role="group" aria-label="Route actions">
                 <button
-                    class="btn btn--primary btn--large"
+                    class="home-take-me-back"
                     id="btn-take-me-back"
                     aria-label="Take me back to my starting point"
                     disabled
                 >
                     Take me back
                 </button>
-                <div class="actions-row">
+                <div class="home-actions-row">
                     <button
                         class="btn btn--secondary"
                         id="btn-save-route"
@@ -214,92 +212,34 @@ function renderFullRecordingView(): string {
                         Landmark
                     </button>
                 </div>
-                <button
-                    class="btn btn--danger"
-                    id="btn-new-route"
-                    aria-label="Clear current route and start a new route"
-                    disabled
-                >
-                    New route
-                </button>
-                <button
-                    class="btn btn--secondary"
-                    id="btn-location-retry"
-                    aria-label="Try location again"
-                    hidden
-                >
-                    Try location again
-                </button>
-                <button
-                    class="btn btn--secondary"
-                    id="btn-view-routes"
-                    aria-label="View saved routes"
-                >
-                    Saved routes
-                </button>
-            </div>
-        </main>
-    `;
-}
-
-function renderSimpleRecordingView(): string {
-    return `
-        <div class="simple-status-bar simple-status-bar--idle" id="simple-status-bar" aria-live="polite"></div>
-        ${renderA11yControls()}
-        ${renderSimulatorControls()}
-        <main class="simple-recording-main">
-            <div class="simple-stats" id="recording-stats" aria-live="polite">
-                <span class="simple-stats__time" id="elapsed-time">0:00</span>
-                <span class="simple-stats__distance" id="distance-walked">0 m</span>
-            </div>
-            <div id="status-indicator">
-                <span class="status-badge status-badge--idle" id="status-badge" aria-live="polite" hidden>
-                    <span id="status-text">Idle</span>
-                </span>
-            </div>
-            <div id="stationary-badge" class="stationary-badge" aria-live="polite" hidden>
-                Stationary
-            </div>
-            <p class="route-quality route-quality--hidden" id="route-quality" aria-live="polite"></p>
-            <p class="keep-open-hint" id="keep-open-hint" hidden>
-                    Keep this app open with the screen on, or the route may stop recording.
-                </p>
-            <button
-                class="btn btn--secondary simple-location-retry"
-                id="btn-location-retry"
-                aria-label="Try location again"
-                hidden
-            >
-                Try location again
-            </button>
-            <button
-                class="simple-take-me-back"
-                id="btn-take-me-back"
-                aria-label="Take me back to my starting point"
-                disabled
-            >
-                TAKE ME BACK
-            </button>
-            <div class="simple-bottom-row">
-                <button
-                    class="btn btn--secondary"
-                    id="btn-simple-more"
-                    aria-label="More options"
-                >
-                    More&hellip;
-                </button>
-                <button
-                    class="btn btn--secondary"
-                    id="btn-view-routes"
-                    aria-label="View saved routes"
-                >
-                    Saved routes
-                </button>
-            </div>
-            <div class="simple-more-panel" id="simple-more-panel" hidden>
-                <button class="btn btn--secondary" id="btn-save-route" aria-label="Save this route for later" disabled>Save this route</button>
-                <button class="btn btn--landmark" id="btn-mark-landmark" aria-label="Mark this spot as a landmark" disabled>Mark landmark</button>
-                <button class="btn btn--danger" id="btn-new-route" aria-label="Clear current route and start a new route" disabled>New route</button>
+                <div class="home-actions-row">
+                    <button
+                        class="btn btn--secondary"
+                        id="btn-view-routes"
+                        aria-label="View saved routes"
+                    >
+                        Saved routes
+                    </button>
+                    <button
+                        class="btn btn--secondary"
+                        id="btn-more-options"
+                        aria-label="More options"
+                        aria-expanded="false"
+                        aria-controls="more-panel"
+                    >
+                        More&hellip;
+                    </button>
+                </div>
+                <div class="home-more-panel" id="more-panel" hidden>
+                    <button
+                        class="btn btn--danger"
+                        id="btn-new-route"
+                        aria-label="Clear current route and start a new route"
+                        disabled
+                    >
+                        New route
+                    </button>
+                </div>
             </div>
         </main>
     `;
@@ -324,10 +264,10 @@ function setStatusRecording(root: HTMLElement): void {
         stats.hidden = false;
     }
     // Simple mode status bar
-    const simpleBar = root.querySelector<HTMLElement>('#simple-status-bar');
+    const simpleBar = root.querySelector<HTMLElement>('#home-status-bar');
     if (simpleBar) {
-        simpleBar.classList.remove('simple-status-bar--idle', 'simple-status-bar--error');
-        simpleBar.classList.add('simple-status-bar--recording');
+        simpleBar.classList.remove('home-status-bar--idle', 'home-status-bar--error');
+        simpleBar.classList.add('home-status-bar--recording');
     }
 }
 
@@ -440,10 +380,10 @@ function setStatusError(root: HTMLElement, message: string, options?: { retry?: 
         };
     }
     // Simple mode status bar
-    const simpleBar = root.querySelector<HTMLElement>('#simple-status-bar');
+    const simpleBar = root.querySelector<HTMLElement>('#home-status-bar');
     if (simpleBar) {
-        simpleBar.classList.remove('simple-status-bar--idle', 'simple-status-bar--recording');
-        simpleBar.classList.add('simple-status-bar--error');
+        simpleBar.classList.remove('home-status-bar--idle', 'home-status-bar--recording');
+        simpleBar.classList.add('home-status-bar--error');
     }
 }
 
@@ -459,43 +399,44 @@ function enableActionButtons(root: HTMLElement): void {
 }
 
 export function mountNavigationView(root: HTMLElement): void {
-    const simple = getSimpleMode();
-    root.innerHTML = simple ? renderSimpleNavigationView() : renderFullNavigationView();
+    root.innerHTML = renderNavigationView();
     wireA11yControls(root);
 }
 
-function renderFullNavigationView(): string {
+function renderNavigationView(): string {
     return `
         ${renderA11yControls()}
         ${renderSimulatorControls()}
         <main class="nav-main">
-            <div class="nav-view">
-                <div class="nav-primary">
-                    <div class="nav-trail-container">
-                        <canvas class="nav-trail-canvas" id="nav-trail-canvas" aria-label="Trail map"></canvas>
-                        <div class="nav-trail-overlay">
-                            <div class="nav-distance-display">
-                                <span class="nav-distance-value" id="nav-distance-value">--</span>
-                                <span class="nav-distance-label" id="nav-distance-label">to start</span>
-                            </div>
-                            <div class="nav-progress" id="nav-progress" aria-live="polite">
-                                <span id="nav-progress-text">Loading&hellip;</span>
-                            </div>
-                            <div class="nav-next-turn" id="nav-next-turn" aria-live="polite" hidden></div>
-                            <div class="nav-recovery-hint" id="nav-recovery-hint" aria-live="polite" hidden></div>
-                        </div>
-                        <div class="nav-compass-corner" aria-label="Compass direction indicator">
-                            <svg class="nav-compass-arrow" id="nav-compass-arrow"
-                                viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"
-                                aria-hidden="true">
-                                <polygon points="50,5 62,70 50,60 38,70" class="compass-north"/>
-                                <polygon points="50,95 62,30 50,40 38,30" class="compass-south"/>
-                            </svg>
-                            <p class="nav-calibration-hint" id="nav-calibration-hint" hidden>
-                                Move your phone in a figure-8 to calibrate compass
-                            </p>
-                        </div>
-                    </div>
+            <section class="nav-panel nav-panel--idle" id="nav-panel">
+                <div class="nav-direction" id="nav-direction" aria-live="polite">Finding way</div>
+                <div class="nav-distance-display">
+                    <span class="nav-distance-value" id="nav-distance-value">--</span>
+                    <span class="nav-distance-label" id="nav-distance-label">to start</span>
+                </div>
+                <div class="nav-next-turn" id="nav-next-turn" aria-live="polite" hidden></div>
+                <div class="nav-progress" id="nav-progress" aria-live="polite">
+                    <span id="nav-progress-text">Loading&hellip;</span>
+                </div>
+                <div class="nav-recovery-hint" id="nav-recovery-hint" aria-live="polite" hidden></div>
+            </section>
+            <div class="nav-trail-container">
+                <canvas class="nav-trail-canvas" id="nav-trail-canvas" aria-label="Trail map"></canvas>
+                <div class="nav-zoom" role="group" aria-label="Map zoom">
+                    <button class="nav-zoom__btn" id="nav-zoom-in" aria-label="Zoom in">+</button>
+                    <button class="nav-zoom__btn" id="nav-zoom-out" aria-label="Zoom out">&minus;</button>
+                    <button class="nav-zoom__btn nav-zoom__btn--auto" id="nav-zoom-auto" aria-label="Automatic zoom" hidden>Auto</button>
+                </div>
+                <div class="nav-compass-corner" aria-label="Compass direction indicator">
+                    <svg class="nav-compass-arrow" id="nav-compass-arrow"
+                        viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true">
+                        <polygon points="50,5 62,70 50,60 38,70" class="compass-north"/>
+                        <polygon points="50,95 62,30 50,40 38,30" class="compass-south"/>
+                    </svg>
+                    <p class="nav-calibration-hint" id="nav-calibration-hint" hidden>
+                        Move your phone in a figure-8 to calibrate compass
+                    </p>
                 </div>
             </div>
         </main>
@@ -508,47 +449,6 @@ function renderFullNavigationView(): string {
                     Enable compass
                 </button>
                 <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode (tones and vibration only, no speech)" aria-pressed="false">
-                    Silent: Off
-                </button>
-            </div>
-            <div class="nav-arrival-actions" id="nav-arrival-actions" role="group" aria-label="You have arrived" hidden>
-                <button class="btn btn--primary btn--large" id="btn-arrival-done" aria-label="Done, finish this walk">
-                    Done
-                </button>
-                <button class="btn btn--secondary" id="btn-arrival-save" aria-label="Save this route for later">
-                    Save this route
-                </button>
-            </div>
-            <button class="btn btn--secondary" id="btn-stop-navigation" aria-label="Stop navigation and return to recording screen">
-                Stop navigation
-            </button>
-        </footer>
-    `;
-}
-
-function renderSimpleNavigationView(): string {
-    return `
-        ${renderA11yControls()}
-        ${renderSimulatorControls()}
-        <main class="simple-nav" id="simple-nav" aria-live="polite">
-            <div class="simple-nav__direction" id="simple-direction">STRAIGHT</div>
-            <div class="simple-nav__distance" id="nav-distance-value">--</div>
-            <div class="simple-nav__label">to start</div>
-            <div class="simple-nav__progress" id="nav-progress" aria-live="polite">
-                <span id="nav-progress-text">Loading&hellip;</span>
-            </div>
-            <div class="nav-next-turn" id="nav-next-turn" aria-live="polite" hidden></div>
-            <div class="nav-recovery-hint" id="nav-recovery-hint" aria-live="polite" hidden></div>
-        </main>
-        <footer class="nav-footer">
-            <div class="nav-footer__row">
-                <button class="btn btn--secondary" id="btn-pocket-mode" aria-label="Put phone in pocket for voice-only navigation" hidden>
-                    Pocket mode
-                </button>
-                <button class="btn btn--secondary" id="btn-enable-compass" aria-label="Enable compass direction" hidden>
-                    Enable compass
-                </button>
-                <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode" aria-pressed="false">
                     Silent: Off
                 </button>
             </div>
@@ -582,13 +482,8 @@ function updateNavDistance(root: HTMLElement, meters: number): void {
 function updateNavProgress(root: HTMLElement, currentIndex: number, total: number): void {
     const el = root.querySelector('#nav-progress-text');
     if (!el) return;
-    if (getSimpleMode()) {
-        const remaining = total - currentIndex;
-        el.textContent = remaining === 1 ? '1 breadcrumb to go' : `${remaining} breadcrumbs to go`;
-    } else {
-        const current = Math.min(currentIndex + 1, total);
-        el.textContent = `Breadcrumb ${current} of ${total}`;
-    }
+    const current = Math.min(currentIndex + 1, total);
+    el.textContent = `Breadcrumb ${current} of ${total}`;
 }
 
 /** A corner closer than this is announced as imminent. */
@@ -628,27 +523,38 @@ function directionWord(dir: Direction): string {
     }
 }
 
-/** Map a Direction to a simple nav CSS modifier. */
-function directionClass(dir: Direction): string {
+type PanelState = 'idle' | 'on-track' | 'turn' | 'wrong';
+
+/** Map a Direction to the navigation panel's state (drives its colour). */
+function panelState(dir: Direction): PanelState {
     switch (dir) {
         case 'straight ahead':
-            return 'simple-nav--on-track';
+            return 'on-track';
         case 'turn right':
         case 'turn left':
-            return 'simple-nav--turn';
+            return 'turn';
         default:
-            return 'simple-nav--wrong';
+            return 'wrong';
     }
 }
 
-function updateSimpleDirection(root: HTMLElement, dir: Direction): void {
-    const dirEl = root.querySelector<HTMLElement>('#simple-direction');
-    const navEl = root.querySelector<HTMLElement>('#simple-nav');
+function setPanelState(root: HTMLElement, state: PanelState): void {
+    const panel = root.querySelector<HTMLElement>('#nav-panel');
+    if (!panel) return;
+    panel.classList.remove(
+        'nav-panel--idle',
+        'nav-panel--on-track',
+        'nav-panel--turn',
+        'nav-panel--wrong'
+    );
+    panel.classList.add(`nav-panel--${state}`);
+}
+
+function updateNavDirection(root: HTMLElement, dir: Direction, offRoute = false): void {
+    const dirEl = root.querySelector<HTMLElement>('#nav-direction');
     if (dirEl) dirEl.textContent = directionWord(dir);
-    if (navEl) {
-        navEl.classList.remove('simple-nav--on-track', 'simple-nav--turn', 'simple-nav--wrong');
-        navEl.classList.add(directionClass(dir));
-    }
+    // Off the route the panel is red whatever the direction, so it reads at a glance
+    setPanelState(root, offRoute ? 'wrong' : panelState(dir));
 }
 
 function showNavArrived(root: HTMLElement): void {
@@ -658,14 +564,10 @@ function showNavArrived(root: HTMLElement): void {
     if (distanceEl) distanceEl.textContent = '0 m';
     const arrow = root.querySelector<SVGElement>('#nav-compass-arrow');
     if (arrow) arrow.style.opacity = '0.3';
-    // Simple mode: show arrived state
-    const dirEl = root.querySelector<HTMLElement>('#simple-direction');
+    const dirEl = root.querySelector<HTMLElement>('#nav-direction');
     if (dirEl) dirEl.textContent = 'ARRIVED';
-    const navEl = root.querySelector<HTMLElement>('#simple-nav');
-    if (navEl) {
-        navEl.classList.remove('simple-nav--turn', 'simple-nav--wrong');
-        navEl.classList.add('simple-nav--on-track');
-    }
+    setPanelState(root, 'on-track');
+    updateNavNextTurn(root, null);
 }
 
 /**
@@ -826,6 +728,22 @@ export function switchToNavigationView(
         });
     }
 
+    // Zoom: automatic by default; + / - take over, Auto hands it back
+    const zoomAutoBtn = root.querySelector<HTMLButtonElement>('#nav-zoom-auto');
+    function setZoom(next: number | null): void {
+        zoomIndex = next;
+        if (zoomAutoBtn) zoomAutoBtn.hidden = next === null;
+        renderTrail();
+    }
+    root.querySelector<HTMLButtonElement>('#nav-zoom-in')?.addEventListener('click', () => {
+        // Closer in = shorter range. From automatic, start at the second step.
+        setZoom(zoomIndex === null ? 1 : Math.max(0, zoomIndex - 1));
+    });
+    root.querySelector<HTMLButtonElement>('#nav-zoom-out')?.addEventListener('click', () => {
+        setZoom(zoomIndex === null ? 2 : Math.min(ZOOM_RANGES_METERS.length - 1, zoomIndex + 1));
+    });
+    zoomAutoBtn?.addEventListener('click', () => setZoom(null));
+
     // Pocket mode: wake lock, audio keepalive, shake detector
     const wakeLock = createWakeLockManager();
     const audioKeepAlive = createAudioKeepAlive();
@@ -888,11 +806,13 @@ export function switchToNavigationView(
     const fusion = createHeadingFusion();
     const navGps = createGeolocationService({ disableMotionSuspension: true, emitEveryFix: true });
     let previousDirection: Direction | null = null;
-    let lastSimpleUpdateTime = 0;
-    const SIMPLE_THROTTLE_MS = 1000;
+    let lastDirectionUpdateTime = 0;
+    const DIRECTION_THROTTLE_MS = 1000;
 
     // Trail renderer — initialised once breadcrumbs are loaded
     let trailRenderer: TrailRenderer | null = null;
+    /** Manual zoom step (index into ZOOM_RANGES_METERS); null = automatic. */
+    let zoomIndex: number | null = null;
 
     /**
      * Which way the user is facing: GPS course while walking, corrected compass when
@@ -903,9 +823,25 @@ export function switchToNavigationView(
         return fusion.fusedHeading ?? compassFallback ?? navGps.movementBearing;
     }
 
+    /** Update the big direction word, with hysteresis and a 1 s throttle so it never flickers. */
+    function refreshDirection(): void {
+        const heading = currentHeading();
+        if (bearingToBreadcrumb === null || heading === null) return;
+        const now = Date.now();
+        if (now - lastDirectionUpdateTime < DIRECTION_THROTTLE_MS) return;
+        lastDirectionUpdateTime = now;
+        const dir = classifyDirectionWithHysteresis(
+            bearingToBreadcrumb - heading,
+            previousDirection
+        );
+        previousDirection = dir;
+        updateNavDirection(root, dir, nav.isOffRoute);
+    }
+
     /** Arrived: celebrate, stop tracking, and offer Save / Done instead of "stop navigation". */
     function handleArrival(): void {
         showNavArrived(root);
+        updateNavRecoveryHint(root, null);
         feedback.cancelPending();
         feedback.playArrivalFeedback();
         navGps.stop();
@@ -955,6 +891,12 @@ export function switchToNavigationView(
             currentPosition: currentPos,
             compassHeading: currentHeading(),
             isOffRoute: nav.isOffRoute,
+            zoomRangeMeters: zoomIndex === null ? null : ZOOM_RANGES_METERS[zoomIndex],
+            gapSegments: nav.gapSegments,
+            guidePoint:
+                nav.isOffRoute && currentPos
+                    ? (nav.nearestPathPoint(currentPos)?.point ?? null)
+                    : null,
         });
     }
 
@@ -1029,28 +971,9 @@ export function switchToNavigationView(
 
         const fusedHeading = currentHeading();
         if (bearingToBreadcrumb !== null && fusedHeading !== null) {
-            const delta = bearingToBreadcrumb - fusedHeading;
-            feedback.vibrateAlignment(delta);
-
-            // Update simple mode direction display with hysteresis + throttle + look-ahead
-            if (getSimpleMode()) {
-                const now = Date.now();
-                if (now - lastSimpleUpdateTime >= SIMPLE_THROTTLE_MS) {
-                    lastSimpleUpdateTime = now;
-                    // Use the same guidance target as the arrow
-                    let simpleTarget = bearingToBreadcrumb;
-                    const posForBearing = smoother.smoothed ?? currentPos;
-                    if (posForBearing) {
-                        const target = guidanceTarget(posForBearing);
-                        if (target) simpleTarget = bearingDegrees(posForBearing, target);
-                    }
-                    const simpleDelta = simpleTarget - fusedHeading;
-                    const dir = classifyDirectionWithHysteresis(simpleDelta, previousDirection);
-                    previousDirection = dir;
-                    updateSimpleDirection(root, dir);
-                }
-            }
+            feedback.vibrateAlignment(bearingToBreadcrumb - fusedHeading);
         }
+        refreshDirection();
     };
 
     const loadBreadcrumbs: Promise<Breadcrumb[]> = breadcrumbsOverride
@@ -1103,6 +1026,11 @@ export function switchToNavigationView(
             let landmarkAnnouncedNear = false;
 
             nav.onOffRouteChange = (offRoute: boolean) => {
+                // Recolour the panel straight away rather than waiting for the next direction update
+                setPanelState(
+                    root,
+                    offRoute ? 'wrong' : previousDirection ? panelState(previousDirection) : 'idle'
+                );
                 if (offRoute) {
                     feedback.playOffRouteFeedback();
                     const nearest = currentPos ? nav.nearestPathPoint(currentPos) : null;
@@ -1226,23 +1154,7 @@ export function switchToNavigationView(
                     firstFix = false;
 
                     refreshArrow();
-                    const headingForSimple = currentHeading();
-                    if (
-                        getSimpleMode() &&
-                        bearingToBreadcrumb !== null &&
-                        headingForSimple !== null
-                    ) {
-                        const now = Date.now();
-                        if (now - lastSimpleUpdateTime >= SIMPLE_THROTTLE_MS) {
-                            lastSimpleUpdateTime = now;
-                            const dir = classifyDirectionWithHysteresis(
-                                bearingToBreadcrumb - headingForSimple,
-                                previousDirection
-                            );
-                            previousDirection = dir;
-                            updateSimpleDirection(root, dir);
-                        }
-                    }
+                    refreshDirection();
                     renderTrail();
                 },
                 () => {
@@ -1990,14 +1902,15 @@ export function startRecording(root: HTMLElement): void {
     let recordingActionsWired = false;
     let poorAccuracyStreak = 0;
 
-    // Wire simple mode "More..." toggle
-    const moreBtn = root.querySelector<HTMLButtonElement>('#btn-simple-more');
-    const morePanel = root.querySelector<HTMLElement>('#simple-more-panel');
+    // "More..." reveals the rarely used, harder-to-undo actions
+    const moreBtn = root.querySelector<HTMLButtonElement>('#btn-more-options');
+    const morePanel = root.querySelector<HTMLElement>('#more-panel');
     if (moreBtn && morePanel) {
         moreBtn.addEventListener('click', () => {
-            const hidden = morePanel.hidden;
-            morePanel.hidden = !hidden;
-            moreBtn.textContent = hidden ? 'Less' : 'More\u2026';
+            const opening = morePanel.hidden;
+            morePanel.hidden = !opening;
+            moreBtn.setAttribute('aria-expanded', String(opening));
+            moreBtn.textContent = opening ? 'Less' : 'More\u2026';
         });
     }
 

@@ -1,18 +1,12 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { switchToNavigationView, _resetModalOpen } from './main';
-import { getSimpleMode, toggleSimpleMode } from './settings';
 import { appendBreadcrumb, clearSession, getSession, listRoutes, deleteRoute } from './storage';
 import type { Breadcrumb } from './types';
 
 const ORIGIN = { lat: 51.5, lng: -0.1 };
 const M_PER_DEG_LAT = 111_195;
 const M_PER_DEG_LNG = M_PER_DEG_LAT * Math.cos((ORIGIN.lat * Math.PI) / 180);
-
-/** Put the app in the requested simple/full mode. */
-function setSimpleMode(enabled: boolean): void {
-    if (getSimpleMode() !== enabled) toggleSimpleMode();
-}
 
 const wait = (ms = 30): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -74,7 +68,6 @@ describe('navigation guidance on screen', () => {
     }
 
     beforeEach(() => {
-        setSimpleMode(false);
         _resetModalOpen();
         root = document.createElement('div');
         root.id = 'app';
@@ -92,7 +85,6 @@ describe('navigation guidance on screen', () => {
     });
 
     afterEach(() => {
-        setSimpleMode(false);
         document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
         document.body.removeChild(root);
         _resetModalOpen();
@@ -125,6 +117,82 @@ describe('navigation guidance on screen', () => {
         it('says "to finish" when following a saved route', async () => {
             await start(line(0, 0, 0, 200), true);
             expect(text('#nav-distance-label')).toBe('to finish');
+        });
+    });
+
+    describe('direction word', () => {
+        it('starts neutral, then says STRAIGHT in green when facing the route', async () => {
+            await start(line(0, 0, 0, 200), false);
+            expect(text('#nav-direction')).toBe('Finding way');
+            expect(root.querySelector('#nav-panel')?.classList.contains('nav-panel--idle')).toBe(
+                true
+            );
+
+            fixAt(0, 200);
+            // Facing south (alpha 180) with the route running south from here
+            vi.setSystemTime(Date.now() + 1000);
+            window.dispatchEvent(
+                Object.assign(new Event('deviceorientation'), { alpha: 180, beta: 0, gamma: 0 })
+            );
+            await wait();
+
+            expect(text('#nav-direction')).toBe('STRAIGHT');
+            expect(
+                root.querySelector('#nav-panel')?.classList.contains('nav-panel--on-track')
+            ).toBe(true);
+        });
+
+        it('says TURN LEFT/RIGHT in amber and BEHIND YOU in red', async () => {
+            await start(line(0, 0, 0, 200), false);
+            fixAt(0, 200);
+
+            // Route is due south. Facing west (alpha 90 => heading 270) puts it on the left
+            vi.setSystemTime(Date.now() + 1000);
+            window.dispatchEvent(
+                Object.assign(new Event('deviceorientation'), { alpha: 90, beta: 0, gamma: 0 })
+            );
+            await wait();
+            expect(text('#nav-direction')).toBe('TURN LEFT');
+            expect(root.querySelector('#nav-panel')?.classList.contains('nav-panel--turn')).toBe(
+                true
+            );
+
+            // Turn round to face north (alpha 0) over several readings, as a person would:
+            // the route is then behind
+            for (let i = 0; i < 25; i++) {
+                vi.setSystemTime(Date.now() + 250);
+                window.dispatchEvent(
+                    Object.assign(new Event('deviceorientation'), { alpha: 0, beta: 0, gamma: 0 })
+                );
+            }
+            await wait();
+            expect(text('#nav-direction')).toBe('BEHIND YOU');
+            expect(root.querySelector('#nav-panel')?.classList.contains('nav-panel--wrong')).toBe(
+                true
+            );
+        });
+
+        it('turns the panel red when off the route, and back again on rejoining', async () => {
+            await start(line(0, 0, 0, 200), false);
+            const panel = (): DOMTokenList | undefined =>
+                root.querySelector('#nav-panel')?.classList;
+
+            for (let i = 0; i < 4; i++) fixAt(70, 100); // 70 m from the route
+            await wait();
+            expect(panel()?.contains('nav-panel--wrong')).toBe(true);
+            expect(text('#nav-recovery-hint')).toContain('Off trail');
+
+            fixAt(3, 100); // back beside it
+            await wait();
+            expect(panel()?.contains('nav-panel--wrong')).toBe(false);
+        });
+
+        it('says ARRIVED when done', async () => {
+            await start(line(0, 0, 0, 40), false);
+            fixAt(0, 40);
+            for (let y = 30; y >= 0; y -= 10) fixAt(0, y);
+            await wait();
+            expect(text('#nav-direction')).toBe('ARRIVED');
         });
     });
 
@@ -170,15 +238,31 @@ describe('navigation guidance on screen', () => {
             await wait();
             expect(hidden('#nav-next-turn')).toBe(true);
         });
+    });
 
-        it('appears in simple mode too', async () => {
-            setSimpleMode(true);
-            await start(lRoute, false);
-            fixAt(100, 100);
-            for (let x = 90; x >= 60; x -= 10) fixAt(x, 100);
-            await wait();
+    describe('map zoom', () => {
+        const click = (selector: string): void =>
+            root.querySelector<HTMLButtonElement>(selector)?.click();
 
-            expect(text('#nav-next-turn')).toMatch(/^Turn left in/);
+        it('starts automatic; the + and - buttons take over and Auto hands control back', async () => {
+            await start(line(0, 0, 0, 200), false);
+            expect(hidden('#nav-zoom-auto')).toBe(true);
+
+            click('#nav-zoom-in');
+            expect(hidden('#nav-zoom-auto')).toBe(false);
+
+            click('#nav-zoom-out');
+            expect(hidden('#nav-zoom-auto')).toBe(false);
+
+            click('#nav-zoom-auto');
+            expect(hidden('#nav-zoom-auto')).toBe(true);
+        });
+
+        it('keeps working at the limits of the zoom range', async () => {
+            await start(line(0, 0, 0, 200), false);
+            for (let i = 0; i < 10; i++) click('#nav-zoom-in');
+            for (let i = 0; i < 10; i++) click('#nav-zoom-out');
+            expect(hidden('#nav-zoom-auto')).toBe(false);
         });
     });
 
@@ -263,6 +347,11 @@ describe('navigation guidance on screen', () => {
             expect(hidden('#btn-stop-navigation')).toBe(true);
             expect(text('#btn-arrival-done')).toBe('Done');
             expect(hidden('#btn-arrival-save')).toBe(false);
+        });
+
+        it('clears any lingering guidance hint once arrived', async () => {
+            await arriveByRetrace();
+            expect(hidden('#nav-recovery-hint')).toBe(true);
         });
 
         it('keeps the normal stop button until arrival', async () => {

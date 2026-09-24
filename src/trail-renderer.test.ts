@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
     projectToLocal,
-    computeBoundingBox,
-    computeAutoZoomBoundingBox,
     drawCatmullRom,
+    rotateToHeadingUp,
+    lookaheadPoints,
+    computeViewScale,
+    ZOOM_RANGES_METERS,
 } from '@/trail-renderer';
 import type { Breadcrumb } from '@/types';
 import type { Point } from '@/trail-renderer';
@@ -87,47 +89,6 @@ describe('projectToLocal – equirectangular projection', () => {
         const result = projectToLocal(ne, origin);
         expect(result.x).toBeGreaterThan(0);
         expect(result.y).toBeLessThan(0);
-    });
-});
-
-describe('computeBoundingBox', () => {
-    it('returns null for empty array', () => {
-        expect(computeBoundingBox([])).toBeNull();
-    });
-
-    it('returns single point as degenerate box', () => {
-        const result = computeBoundingBox([{ x: 5, y: 10 }]);
-        expect(result).toEqual({ minX: 5, maxX: 5, minY: 10, maxY: 10 });
-    });
-
-    it('computes correct bounds for multiple points', () => {
-        const points = [
-            { x: 0, y: 0 },
-            { x: 100, y: -50 },
-            { x: -20, y: 80 },
-            { x: 50, y: 30 },
-        ];
-        const result = computeBoundingBox(points);
-        expect(result).toEqual({ minX: -20, maxX: 100, minY: -50, maxY: 80 });
-    });
-
-    it('handles negative coordinates correctly', () => {
-        const points = [
-            { x: -100, y: -200 },
-            { x: -50, y: -10 },
-        ];
-        const result = computeBoundingBox(points);
-        expect(result).toEqual({ minX: -100, maxX: -50, minY: -200, maxY: -10 });
-    });
-
-    it('handles all same-value points', () => {
-        const points = [
-            { x: 5, y: 5 },
-            { x: 5, y: 5 },
-            { x: 5, y: 5 },
-        ];
-        const result = computeBoundingBox(points);
-        expect(result).toEqual({ minX: 5, maxX: 5, minY: 5, maxY: 5 });
     });
 });
 
@@ -242,105 +203,6 @@ describe('drawCatmullRom', () => {
             expect(Math.abs(call[1])).toBeLessThan(1); // cp1y ≈ 0
             expect(Math.abs(call[3])).toBeLessThan(1); // cp2y ≈ 0
         }
-    });
-});
-
-describe('computeAutoZoomBoundingBox', () => {
-    // Helper: make projected points at simple integer coordinates
-    function pt(x: number, y: number): Point {
-        return { x, y };
-    }
-
-    const projected = [
-        pt(0, 0), // index 0
-        pt(10, 0), // index 1
-        pt(20, 0), // index 2
-        pt(30, 0), // index 3
-        pt(40, 0), // index 4
-    ];
-
-    it('returns null for empty projected array', () => {
-        expect(computeAutoZoomBoundingBox([], 0, null)).toBeNull();
-    });
-
-    it('uses only remaining breadcrumbs when >= 3 remain', () => {
-        // currentIndex=1: remaining = [10,20,30,40] (4 points, >= 3)
-        const bbox = computeAutoZoomBoundingBox(projected, 1, null);
-        expect(bbox).not.toBeNull();
-        // x should span from 10 to 40 (remaining only, no walked points)
-        expect(bbox!.minX).toBe(10);
-        expect(bbox!.maxX).toBe(40);
-    });
-
-    it('includes current position in bounding box', () => {
-        // currentIndex=1, currentPt far right at x=100
-        const bbox = computeAutoZoomBoundingBox(projected, 1, pt(100, 0));
-        expect(bbox).not.toBeNull();
-        expect(bbox!.maxX).toBe(100);
-    });
-
-    it('includes nearby walked points when fewer than 3 remaining', () => {
-        // currentIndex=4: remaining = [pt(40,0)] — only 1 point, need 2 more walked
-        // Should pull in indices 2 and 3 (x=20, x=30)
-        const bbox = computeAutoZoomBoundingBox(projected, 4, null);
-        expect(bbox).not.toBeNull();
-        // minX should be 20 (walked index 2), maxX should be 40 (remaining index 4)
-        expect(bbox!.minX).toBe(20);
-        expect(bbox!.maxX).toBe(40);
-    });
-
-    it('includes all walked points when only 2 remaining and trail is short', () => {
-        // currentIndex=3: remaining = [pt(30,0), pt(40,0)] — 2 points, need 1 more walked
-        const bbox = computeAutoZoomBoundingBox(projected, 3, null);
-        expect(bbox).not.toBeNull();
-        // Should include index 2 (x=20) as the nearest walked point
-        expect(bbox!.minX).toBe(20);
-        expect(bbox!.maxX).toBe(40);
-    });
-
-    it('returns bounding box from remaining when exactly 3 remain', () => {
-        // currentIndex=2: remaining = [pt(20,0), pt(30,0), pt(40,0)] — exactly 3
-        const bbox = computeAutoZoomBoundingBox(projected, 2, null);
-        expect(bbox).not.toBeNull();
-        expect(bbox!.minX).toBe(20);
-        expect(bbox!.maxX).toBe(40);
-        // Should NOT include walked points (index 0,1 with x=0,10)
-    });
-
-    it('handles currentIndex = 0 (no walked points yet)', () => {
-        // All 5 points remaining — bbox spans entire trail
-        const bbox = computeAutoZoomBoundingBox(projected, 0, null);
-        expect(bbox).not.toBeNull();
-        expect(bbox!.minX).toBe(0);
-        expect(bbox!.maxX).toBe(40);
-    });
-
-    it('handles currentIndex beyond end of trail (arrived)', () => {
-        // currentIndex=5, no remaining — uses last MIN_VISIBLE_UPCOMING walked points
-        const bbox = computeAutoZoomBoundingBox(projected, 5, null);
-        expect(bbox).not.toBeNull();
-        // Should include indices 2,3,4 (x=20,30,40)
-        expect(bbox!.minX).toBe(20);
-        expect(bbox!.maxX).toBe(40);
-    });
-
-    it('handles single-point trail with current position', () => {
-        const single = [pt(50, 50)];
-        const bbox = computeAutoZoomBoundingBox(single, 0, pt(60, 70));
-        expect(bbox).not.toBeNull();
-        expect(bbox!.minX).toBe(50);
-        expect(bbox!.maxX).toBe(60);
-        expect(bbox!.minY).toBe(50);
-        expect(bbox!.maxY).toBe(70);
-    });
-
-    it('bounding box is tighter than full trail when near the end', () => {
-        // currentIndex=3 (2 remaining): bbox should not span from x=0 to x=40
-        const fullBbox = computeBoundingBox(projected)!;
-        const zoomBbox = computeAutoZoomBoundingBox(projected, 3, null)!;
-        const fullRange = fullBbox.maxX - fullBbox.minX;
-        const zoomRange = zoomBbox.maxX - zoomBbox.minX;
-        expect(zoomRange).toBeLessThan(fullRange);
     });
 });
 
@@ -512,25 +374,45 @@ describe('createTrailRenderer – heading-up rotation', () => {
         expect(rotateCalls[0][0]).toBeCloseTo(-Math.PI, 5);
     });
 
-    it('translates around canvas centre (width/2, height/2)', async () => {
+    it('puts the user at a fixed anchor: horizontally centred, below the middle', async () => {
         const { createTrailRenderer } = await import('@/trail-renderer');
         const canvas = document.createElement('canvas');
-        // jsdom canvas has 0x0 by default; set explicit CSS size via style
         Object.defineProperty(canvas, 'clientWidth', { get: () => 400 });
-        Object.defineProperty(canvas, 'clientHeight', { get: () => 300 });
+        Object.defineProperty(canvas, 'clientHeight', { get: () => 500 });
         const ctx = makeFullCtxMock();
         vi.spyOn(canvas, 'getContext').mockReturnValue(ctx);
 
         const renderer = createTrailRenderer({ canvas });
-        renderer.render({ trail, currentIndex: 1, currentPosition: null, compassHeading: 45 });
+        renderer.render({ trail, currentIndex: 1, currentPosition: trail[0], compassHeading: 45 });
 
         const translateCalls = (ctx.translate as ReturnType<typeof vi.fn>).mock.calls;
-        // First translate: to centre (200, 150)
         expect(translateCalls[0][0]).toBeCloseTo(200, 0);
-        expect(translateCalls[0][1]).toBeCloseTo(150, 0);
-        // Second translate: back from centre (-200, -150)
-        expect(translateCalls[1][0]).toBeCloseTo(-200, 0);
-        expect(translateCalls[1][1]).toBeCloseTo(-150, 0);
+        expect(translateCalls[0][1]).toBeCloseTo(500 * 0.72, 0);
+    });
+
+    it('keeps the user at the anchor as they move: the dot is always drawn at (0, 0)', async () => {
+        const { createTrailRenderer } = await import('@/trail-renderer');
+        const canvas = document.createElement('canvas');
+        Object.defineProperty(canvas, 'clientWidth', { get: () => 400 });
+        Object.defineProperty(canvas, 'clientHeight', { get: () => 500 });
+        const ctx = makeFullCtxMock();
+        vi.spyOn(canvas, 'getContext').mockReturnValue(ctx);
+
+        const renderer = createTrailRenderer({ canvas });
+        for (const position of [trail[0], trail[1], trail[2]]) {
+            (ctx.arc as ReturnType<typeof vi.fn>).mockClear();
+            renderer.render({
+                trail,
+                currentIndex: 1,
+                currentPosition: position,
+                compassHeading: 0,
+            });
+            const dot = (ctx.arc as ReturnType<typeof vi.fn>).mock.calls.find(
+                (c: number[]) => c[2] === 9
+            );
+            expect(dot?.[0]).toBe(0);
+            expect(dot?.[1]).toBe(0);
+        }
     });
 
     it('does not call rotate for an empty trail (no rotation applied)', async () => {
@@ -675,10 +557,10 @@ describe('createTrailRenderer – position dot and target waypoint', () => {
 
         const arcCalls = (ctx.arc as ReturnType<typeof vi.fn>).mock.calls;
         // arc(x, y, radius, startAngle, endAngle)
-        // First arc = position dot (radius index 2), second = target waypoint
+        // The target waypoint is drawn first and the position dot last, on top of it
         expect(arcCalls).toHaveLength(2);
-        const positionRadius = arcCalls[0][2];
-        const waypointRadius = arcCalls[1][2];
+        const waypointRadius = arcCalls[0][2];
+        const positionRadius = arcCalls[1][2];
         expect(positionRadius).toBeGreaterThan(waypointRadius);
     });
 });
@@ -1079,5 +961,314 @@ describe('createTrailRenderer – devicePixelRatio and RAF throttling', () => {
         // Second render after frame — should schedule rAF #2
         renderer.render({ trail, currentIndex: 1, currentPosition: null });
         expect(calls).toHaveLength(2);
+    });
+});
+
+describe('rotateToHeadingUp', () => {
+    it('leaves points alone when heading north', () => {
+        const p = rotateToHeadingUp({ x: 3, y: -4 }, 0);
+        expect(p.x).toBeCloseTo(3, 6);
+        expect(p.y).toBeCloseTo(-4, 6);
+    });
+
+    it('puts a point straight ahead (up) when the user faces it', () => {
+        // Facing east: a point due east (x > 0) should end up straight ahead (negative y)
+        const p = rotateToHeadingUp({ x: 10, y: 0 }, 90);
+        expect(p.x).toBeCloseTo(0, 6);
+        expect(p.y).toBeCloseTo(-10, 6);
+    });
+
+    it('puts a point behind the user below them', () => {
+        // Facing north: a point due south (y > 0) is behind
+        const p = rotateToHeadingUp({ x: 0, y: 10 }, 0);
+        expect(p.y).toBeGreaterThan(0);
+    });
+
+    it('puts a point to the right of the user on the right of the view', () => {
+        // Facing north: a point due east is on the right
+        expect(rotateToHeadingUp({ x: 10, y: 0 }, 0).x).toBeGreaterThan(0);
+        // Facing south: a point due east is on the left
+        expect(rotateToHeadingUp({ x: 10, y: 0 }, 180).x).toBeLessThan(0);
+    });
+
+    it('preserves distance', () => {
+        const p = rotateToHeadingUp({ x: 3, y: 4 }, 137);
+        expect(Math.hypot(p.x, p.y)).toBeCloseTo(5, 6);
+    });
+});
+
+describe('lookaheadPoints', () => {
+    // A straight path going north every 50 m from the user: y = -50, -100, ...
+    const path: Point[] = Array.from({ length: 12 }, (_, i) => ({ x: 0, y: -50 * (i + 1) }));
+
+    it('returns nothing once the trail is finished', () => {
+        expect(lookaheadPoints(path, path.length)).toEqual([]);
+    });
+
+    it('starts at the target crumb and stops once the lookahead is covered', () => {
+        const result = lookaheadPoints(path, 0, 150);
+        expect(result[0]).toEqual(path[0]);
+        // 50 + 50 + 50 = 150 m: reaches the limit with the third crumb
+        expect(result).toHaveLength(3);
+    });
+
+    it('includes the crumb that crosses the limit, not just those before it', () => {
+        expect(lookaheadPoints(path, 0, 120)).toHaveLength(3);
+    });
+
+    it('returns everything left when the route is shorter than the lookahead', () => {
+        expect(lookaheadPoints(path, 10, 1000)).toHaveLength(2);
+    });
+
+    it('only looks at the remaining path, not what has been walked', () => {
+        const result = lookaheadPoints(path, 5, 60);
+        expect(result[0]).toEqual(path[5]);
+    });
+});
+
+describe('computeViewScale', () => {
+    const view = { width: 400, height: 500 };
+
+    it('fits the path ahead in auto mode', () => {
+        // 100 m straight ahead
+        const scale = computeViewScale({ ...view, points: [{ x: 0, y: -100 }] });
+        // 100 m must map to no more than the space above the user (72% of the height less margin)
+        expect(100 * scale).toBeLessThanOrEqual(500 * 0.72);
+        expect(100 * scale).toBeGreaterThan(500 * 0.72 * 0.8);
+    });
+
+    it('zooms out for a longer path and in for a short one', () => {
+        const near = computeViewScale({ ...view, points: [{ x: 0, y: -50 }] });
+        const far = computeViewScale({ ...view, points: [{ x: 0, y: -250 }] });
+        expect(far).toBeLessThan(near);
+    });
+
+    it('never zooms in past a minimum range, so the last few metres do not blow up', () => {
+        const tiny = computeViewScale({ ...view, points: [{ x: 0, y: -2 }] });
+        const forty = computeViewScale({ ...view, points: [{ x: 0, y: -40 }] });
+        expect(tiny).toBeCloseTo(forty, 6);
+    });
+
+    it('keeps sideways points on screen as well', () => {
+        const scale = computeViewScale({ ...view, points: [{ x: 300, y: -20 }] });
+        expect(300 * scale).toBeLessThanOrEqual(400 / 2);
+    });
+
+    it('uses the manual range when given, ignoring the path', () => {
+        const scale = computeViewScale({
+            ...view,
+            points: [{ x: 0, y: -500 }],
+            zoomRangeMeters: 80,
+        });
+        expect(80 * scale).toBeCloseTo(500 * 0.72 - 24, 3);
+    });
+
+    it('treats a null manual range as auto', () => {
+        const auto = computeViewScale({ ...view, points: [{ x: 0, y: -100 }] });
+        expect(
+            computeViewScale({ ...view, points: [{ x: 0, y: -100 }], zoomRangeMeters: null })
+        ).toBe(auto);
+    });
+
+    it('is bounded for degenerate input', () => {
+        const scale = computeViewScale({ points: [], width: 0, height: 0 });
+        expect(Number.isFinite(scale)).toBe(true);
+        expect(scale).toBeGreaterThan(0);
+    });
+
+    it('offers increasing manual zoom ranges', () => {
+        expect(ZOOM_RANGES_METERS.length).toBeGreaterThanOrEqual(3);
+        for (let i = 1; i < ZOOM_RANGES_METERS.length; i++) {
+            expect(ZOOM_RANGES_METERS[i]).toBeGreaterThan(ZOOM_RANGES_METERS[i - 1]);
+        }
+    });
+});
+
+describe('createTrailRenderer – guide, gaps and labels', () => {
+    function makeCtx() {
+        return {
+            save: vi.fn(),
+            restore: vi.fn(),
+            rotate: vi.fn(),
+            translate: vi.fn(),
+            scale: vi.fn(),
+            clearRect: vi.fn(),
+            beginPath: vi.fn(),
+            closePath: vi.fn(),
+            moveTo: vi.fn(),
+            lineTo: vi.fn(),
+            bezierCurveTo: vi.fn(),
+            arc: vi.fn(),
+            stroke: vi.fn(),
+            fill: vi.fn(),
+            fillText: vi.fn(),
+            setLineDash: vi.fn(),
+            strokeStyle: '',
+            fillStyle: '',
+            lineWidth: 1,
+            lineCap: '',
+            lineJoin: '',
+            font: '',
+            textAlign: '',
+            shadowColor: '',
+            shadowBlur: 0,
+        } as unknown as CanvasRenderingContext2D;
+    }
+
+    async function draw(
+        state: Partial<import('@/trail-renderer').TrailRenderState>
+    ): Promise<CanvasRenderingContext2D> {
+        const { createTrailRenderer } = await import('@/trail-renderer');
+        const canvas = document.createElement('canvas');
+        Object.defineProperty(canvas, 'clientWidth', { get: () => 400 });
+        Object.defineProperty(canvas, 'clientHeight', { get: () => 500 });
+        const ctx = makeCtx();
+        vi.spyOn(canvas, 'getContext').mockReturnValue(ctx);
+        createTrailRenderer({ canvas }).render({
+            trail: [
+                makeBreadcrumb(51.5, -0.1),
+                makeBreadcrumb(51.501, -0.1),
+                makeBreadcrumb(51.502, -0.1),
+            ],
+            currentIndex: 1,
+            currentPosition: makeBreadcrumb(51.5005, -0.1),
+            ...state,
+        });
+        return ctx;
+    }
+
+    const dashCalls = (ctx: CanvasRenderingContext2D): number[][] =>
+        (ctx.setLineDash as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0] as number[]);
+
+    it('draws no dashes when there is no guide and no gap', async () => {
+        const ctx = await draw({});
+        expect(dashCalls(ctx).filter(d => d.length > 0)).toHaveLength(0);
+    });
+
+    it('draws a dashed guide line from the user to the nearest point of the route', async () => {
+        const ctx = await draw({ guidePoint: makeBreadcrumb(51.5005, -0.1015), isOffRoute: true });
+        expect(dashCalls(ctx).some(d => d.length > 0)).toBe(true);
+        // The guide starts at the user, who is always at the origin of the translated view
+        const moves = (ctx.moveTo as ReturnType<typeof vi.fn>).mock.calls;
+        expect(moves.some((c: number[]) => c[0] === 0 && c[1] === 0)).toBe(true);
+    });
+
+    it('draws gap segments as dashed straight lines and then clears the dash', async () => {
+        const ctx = await draw({ gapSegments: [1] });
+        const dashes = dashCalls(ctx);
+        expect(dashes.some(d => d.length > 0)).toBe(true);
+        expect(dashes[dashes.length - 1]).toEqual([]);
+    });
+
+    it('ignores gap indices outside the trail', async () => {
+        const ctx = await draw({ gapSegments: [-1, 2, 99] });
+        expect(dashCalls(ctx).filter(d => d.length > 0)).toHaveLength(0);
+    });
+
+    it('counter-rotates landmark labels so they read upright', async () => {
+        const ctx = await draw({
+            trail: [
+                makeBreadcrumb(51.5, -0.1),
+                { ...makeBreadcrumb(51.501, -0.1), label: 'Gate' },
+                makeBreadcrumb(51.502, -0.1),
+            ],
+            compassHeading: 90,
+        });
+        const rotates = (ctx.rotate as ReturnType<typeof vi.fn>).mock.calls.map(
+            c => c[0] as number
+        );
+        // The whole view is rotated by -90 degrees, and the label by +90 degrees
+        expect(rotates[0]).toBeCloseTo(-Math.PI / 2, 5);
+        expect(rotates).toContainEqual(expect.closeTo(Math.PI / 2, 5));
+    });
+
+    it('draws the user on top of everything else', async () => {
+        const ctx = await draw({});
+        const arcs = (ctx.arc as ReturnType<typeof vi.fn>).mock.calls;
+        // Target waypoint (radius 6) is drawn before the user dot (radius 9)
+        expect(arcs[arcs.length - 1][2]).toBe(9);
+    });
+
+    it('still draws when there is no GPS fix yet (view centred on the target crumb)', async () => {
+        const ctx = await draw({ currentPosition: null });
+        expect((ctx.stroke as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+    });
+});
+
+describe('createTrailRenderer – walked vs remaining colouring', () => {
+    function makeCtx() {
+        const strokes: Array<{ color: string; moves: number[][]; count: number }> = [];
+        let color = '';
+        let moves: number[][] = [];
+        const ctx = {
+            save: vi.fn(),
+            restore: vi.fn(),
+            rotate: vi.fn(),
+            translate: vi.fn(),
+            scale: vi.fn(),
+            clearRect: vi.fn(),
+            beginPath: vi.fn(() => {
+                moves = [];
+            }),
+            closePath: vi.fn(),
+            moveTo: vi.fn((x: number, y: number) => moves.push([x, y])),
+            lineTo: vi.fn(),
+            bezierCurveTo: vi.fn(),
+            arc: vi.fn(),
+            fill: vi.fn(),
+            stroke: vi.fn(() => strokes.push({ color, moves: [...moves], count: strokes.length })),
+            setLineDash: vi.fn(),
+            lineWidth: 1,
+            lineCap: '',
+            lineJoin: '',
+            fillStyle: '',
+            get strokeStyle() {
+                return color;
+            },
+            set strokeStyle(v: string) {
+                color = v;
+            },
+        } as unknown as CanvasRenderingContext2D;
+        return { ctx, strokes };
+    }
+
+    async function draw(currentIndex: number) {
+        const { createTrailRenderer } = await import('@/trail-renderer');
+        const canvas = document.createElement('canvas');
+        Object.defineProperty(canvas, 'clientWidth', { get: () => 400 });
+        Object.defineProperty(canvas, 'clientHeight', { get: () => 500 });
+        const { ctx, strokes } = makeCtx();
+        vi.spyOn(canvas, 'getContext').mockReturnValue(ctx);
+        const trail = [0, 1, 2, 3].map(i => makeBreadcrumb(51.5 + i * 0.001, -0.1));
+        createTrailRenderer({ canvas }).render({
+            trail,
+            currentIndex,
+            currentPosition: trail[Math.max(currentIndex - 1, 0)],
+        });
+        return strokes.filter(st => st.color === '#9ca3af' || st.color === '#3b82f6');
+    }
+
+    it('draws the whole route in blue before anything has been reached', async () => {
+        const strokes = await draw(0);
+        expect(strokes.map(st => st.color)).toEqual(['#3b82f6']);
+    });
+
+    it('draws the first leg blue too: it is the leg being walked, not one already walked', async () => {
+        // Standing on crumb 0 and heading for crumb 1
+        const strokes = await draw(1);
+        expect(strokes.map(st => st.color)).toEqual(['#3b82f6']);
+    });
+
+    it('greys only what lies behind the last reached crumb, and starts the blue there', async () => {
+        const strokes = await draw(3);
+        expect(strokes.map(st => st.color)).toEqual(['#9ca3af', '#3b82f6']);
+        // The blue line starts at the last reached crumb (index 2), so the join is seamless
+        const grey = strokes[0];
+        expect(grey.moves).toHaveLength(1);
+    });
+
+    it('draws only grey when everything has been walked', async () => {
+        const strokes = await draw(4);
+        expect(strokes.map(st => st.color)).toEqual(['#9ca3af']);
     });
 });

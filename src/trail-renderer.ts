@@ -5,15 +5,27 @@ const REMAINING_COLOR = '#3b82f6'; // blue
 const POSITION_DOT_COLOR = '#1d4ed8'; // dark blue (on-route)
 const POSITION_DOT_OFF_ROUTE_COLOR = '#dc2626'; // red (off-route)
 const LANDMARK_COLOR = '#8b5cf6'; // purple
-const TRAIL_LINE_WIDTH = 3;
+const GAP_COLOR = '#f97316'; // orange: a stretch recorded without GPS
+const GUIDE_COLOR = '#dc2626'; // red: the way back onto the route
+const TRAIL_LINE_WIDTH = 4;
 const METERS_PER_DEGREE_LAT = 111_319.5;
 const CATMULL_ROM_TENSION = 0.5;
 
-/** Minimum number of upcoming breadcrumbs the auto-zoom must keep visible. */
-const MIN_VISIBLE_UPCOMING = 3;
+/** Where the user is drawn, as a fraction of the canvas height from the top (ahead is up). */
+const ANCHOR_Y = 0.72;
+/** Auto zoom shows this much of the path still to walk. */
+const AUTO_LOOKAHEAD_METERS = 150;
+/** Auto zoom never shows less than this much ahead of the user. */
+const MIN_RANGE_METERS = 40;
+const EDGE_MARGIN_PX = 24;
+const MIN_SCALE = 0.15; // px per metre
+const MAX_SCALE = 8;
 
 /** EMA smoothing factor for zoom transitions (0 = no smoothing, 1 = instant). */
 const ZOOM_SMOOTH_ALPHA = 0.12;
+
+/** Manual zoom steps: how many metres ahead of the user reach the top of the view. */
+export const ZOOM_RANGES_METERS = [40, 80, 160, 320];
 
 interface TrailRendererOptions {
     canvas: HTMLCanvasElement;
@@ -24,20 +36,10 @@ export interface Point {
     y: number;
 }
 
-interface BoundingBox {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-}
-
 /**
  * Project a lat/lng breadcrumb to local x/y coordinates in meters
  * using equirectangular projection centered on the given origin.
- *
- * @param b - The breadcrumb to project
- * @param origin - The reference (center) breadcrumb
- * @returns x/y in meters
+ * x is east; y is DOWN the screen, so north is negative.
  */
 export function projectToLocal(b: Breadcrumb, origin: Breadcrumb): Point {
     const latMid = toRadians((b.lat + origin.lat) / 2);
@@ -48,6 +50,71 @@ export function projectToLocal(b: Breadcrumb, origin: Breadcrumb): Point {
 
 function toRadians(degrees: number): number {
     return (degrees * Math.PI) / 180;
+}
+
+/**
+ * Rotate a local point (x east, y south) into a heading-up view (x right, y down), the same
+ * transform as `ctx.rotate(-heading)`. Straight ahead ends up with negative y.
+ */
+export function rotateToHeadingUp(p: Point, headingDegrees: number): Point {
+    const phi = toRadians(-headingDegrees);
+    return {
+        x: p.x * Math.cos(phi) - p.y * Math.sin(phi),
+        y: p.x * Math.sin(phi) + p.y * Math.cos(phi),
+    };
+}
+
+/**
+ * The part of the remaining path worth fitting on screen: from the target crumb onward until
+ * `lookaheadMeters` of path have been covered (the crumb that crosses the limit is included).
+ */
+export function lookaheadPoints(
+    local: Point[],
+    currentIndex: number,
+    lookaheadMeters = AUTO_LOOKAHEAD_METERS
+): Point[] {
+    if (currentIndex >= local.length) return [];
+    const result: Point[] = [local[currentIndex]];
+    let covered = Math.hypot(local[currentIndex].x, local[currentIndex].y);
+    for (let i = currentIndex + 1; i < local.length && covered < lookaheadMeters; i++) {
+        covered += Math.hypot(local[i].x - local[i - 1].x, local[i].y - local[i - 1].y);
+        result.push(local[i]);
+    }
+    return result;
+}
+
+interface ViewScaleInput {
+    /** Points to keep in view, already rotated into the heading-up view, relative to the user. */
+    points: Point[];
+    width: number;
+    height: number;
+    /** Manual zoom: metres ahead that reach the top of the view. Omit for auto. */
+    zoomRangeMeters?: number | null;
+}
+
+/** Pixels per metre for the view. */
+export function computeViewScale({
+    points,
+    width,
+    height,
+    zoomRangeMeters,
+}: ViewScaleInput): number {
+    const aheadPx = Math.max(height * ANCHOR_Y - EDGE_MARGIN_PX, 1);
+    const sidePx = Math.max(width / 2 - EDGE_MARGIN_PX, 1);
+
+    let scale: number;
+    if (zoomRangeMeters != null && zoomRangeMeters > 0) {
+        scale = aheadPx / zoomRangeMeters;
+    } else {
+        let forward = MIN_RANGE_METERS;
+        let sideways = 10;
+        for (const p of points) {
+            forward = Math.max(forward, -p.y);
+            sideways = Math.max(sideways, Math.abs(p.x));
+        }
+        scale = Math.min(aheadPx / forward, sidePx / sideways);
+    }
+    return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
 }
 
 /**
@@ -83,7 +150,6 @@ export function drawCatmullRom(
         const p3 = p[i + 2];
 
         // Catmull-Rom with cubic Bezier conversion
-        // Control points derived from Catmull-Rom → Bezier mapping:
         //   cp1 = p1 + (p2 - p0) * alpha / 6
         //   cp2 = p2 - (p3 - p1) * alpha / 6
         const cp1x = p1.x + ((p2.x - p0.x) * alpha) / 6;
@@ -95,61 +161,6 @@ export function drawCatmullRom(
     }
 }
 
-/**
- * Compute the bounding box of a set of local-coordinate points.
- * Returns null if the array is empty.
- */
-export function computeBoundingBox(points: Point[]): BoundingBox | null {
-    if (points.length === 0) return null;
-
-    let minX = points[0].x;
-    let maxX = points[0].x;
-    let minY = points[0].y;
-    let maxY = points[0].y;
-
-    for (const p of points) {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
-    }
-
-    return { minX, maxX, minY, maxY };
-}
-
-/**
- * Compute the bounding box for auto-zoom: considers only the remaining route
- * (from currentIndex onward) plus the current position.
- *
- * If fewer than MIN_VISIBLE_UPCOMING remaining breadcrumbs exist, the box is
- * expanded to include walked points near the end so the view is never too tight.
- *
- * @param projected     - All trail breadcrumbs projected to local coordinates
- * @param currentIndex  - Index of the next target breadcrumb
- * @param currentPt     - Current user position in local coordinates (or null)
- * @returns Bounding box in local coordinates, or null if nothing to show
- */
-export function computeAutoZoomBoundingBox(
-    projected: Point[],
-    currentIndex: number,
-    currentPt: Point | null
-): BoundingBox | null {
-    const remaining = projected.slice(currentIndex);
-
-    // Ensure at least MIN_VISIBLE_UPCOMING points are in the view.
-    // If there are fewer remaining breadcrumbs, include walked ones (nearest first).
-    const minPoints: Point[] = [...remaining];
-    if (minPoints.length < MIN_VISIBLE_UPCOMING) {
-        const needed = MIN_VISIBLE_UPCOMING - minPoints.length;
-        const walkStart = Math.max(0, currentIndex - needed);
-        const walked = projected.slice(walkStart, currentIndex);
-        minPoints.push(...walked);
-    }
-
-    const allPoints: Point[] = currentPt ? [...minPoints, currentPt] : minPoints;
-    return computeBoundingBox(allPoints);
-}
-
 export interface TrailRenderState {
     /** All breadcrumbs in order (walked + remaining). */
     trail: Breadcrumb[];
@@ -158,9 +169,8 @@ export interface TrailRenderState {
     /** Current user position (may not be on the trail). */
     currentPosition: Breadcrumb | null;
     /**
-     * Compass heading in degrees (0 = north, 90 = east). When provided, the canvas
-     * is rotated by -compassHeading so the direction of travel always points up.
-     * If omitted or null, no rotation is applied (north-up).
+     * Heading in degrees (0 = north, 90 = east). The view is rotated so this direction points
+     * up and the user stays fixed on screen. If omitted or null the view is north-up.
      */
     compassHeading?: number | null;
     /**
@@ -168,6 +178,15 @@ export interface TrailRenderState {
      * When true, the position dot is rendered in red instead of blue.
      */
     isOffRoute?: boolean;
+    /** Manual zoom (metres ahead reaching the top of the view); omit or null for auto zoom. */
+    zoomRangeMeters?: number | null;
+    /**
+     * Indices k of trail segments (trail[k] to trail[k + 1]) recorded across a GPS gap;
+     * drawn as dashed straight lines because the real path there is unknown.
+     */
+    gapSegments?: readonly number[];
+    /** When off the route, the nearest point of it: a dashed guide line is drawn to it. */
+    guidePoint?: Breadcrumb | null;
 }
 
 export interface TrailRenderer {
@@ -180,10 +199,8 @@ export interface TrailRenderer {
 }
 
 export function createTrailRenderer({ canvas }: TrailRendererOptions): TrailRenderer {
-    // Smooth zoom state: track the previous frame's scale and offsets for EMA interpolation
+    // Smooth zoom state: the previous frame's scale, for EMA interpolation
     let smoothScale: number | null = null;
-    let smoothOffsetX: number | null = null;
-    let smoothOffsetY: number | null = null;
 
     // RAF throttle state
     let pendingState: TrailRenderState | null = null;
@@ -213,13 +230,9 @@ export function createTrailRenderer({ canvas }: TrailRendererOptions): TrailRend
             canvas.height = physH;
             // Reset smooth-zoom state so the new canvas size produces a clean first frame.
             smoothScale = null;
-            smoothOffsetX = null;
-            smoothOffsetY = null;
         }
 
         // Always apply DPR scaling so that all draw calls use CSS-pixel coordinates.
-        // We must re-apply after any resize (which resets the transform) and also
-        // when the canvas was already the right size (e.g. first render with no resize).
         if (canvas.width !== lastPhysicalWidth || canvas.height !== lastPhysicalHeight) {
             ctx.scale(dpr, dpr);
             lastPhysicalWidth = canvas.width;
@@ -233,80 +246,38 @@ export function createTrailRenderer({ canvas }: TrailRendererOptions): TrailRend
 
         if (trail.length === 0) return;
 
-        // Heading-up rotation: rotate canvas so direction of travel points up.
-        // Rotate by -compassHeading degrees around the canvas centre.
+        // The user is the fixed point of the view. Without a fix, stand on the target crumb.
+        const anchor = currentPosition ?? trail[Math.min(currentIndex, trail.length - 1)];
         const heading = state.compassHeading ?? 0;
-        const cx = width / 2;
-        const cy = height / 2;
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate((-heading * Math.PI) / 180);
-        ctx.translate(-cx, -cy);
+        const local = trail.map(b => projectToLocal(b, anchor));
 
-        // Use first breadcrumb as projection origin
-        const origin = trail[0];
-
-        // Project all trail points
-        const projected = trail.map(b => projectToLocal(b, origin));
-
-        // Also project the current position if available
-        const currentPt = currentPosition ? projectToLocal(currentPosition, origin) : null;
-
-        // Auto-zoom: compute bounding box from remaining route + current position only.
-        // This zooms in as the user approaches the end, and ensures MIN_VISIBLE_UPCOMING crumbs.
-        const bbox = computeAutoZoomBoundingBox(projected, currentIndex, currentPt);
-        if (!bbox) {
-            ctx.restore();
-            return;
-        }
-
-        // Build a transform: local meters → canvas pixels, with 15% padding
-        const PADDING_FACTOR = 0.15;
-        const padX = (bbox.maxX - bbox.minX) * PADDING_FACTOR || 20;
-        const padY = (bbox.maxY - bbox.minY) * PADDING_FACTOR || 20;
-
-        const rangeX = bbox.maxX - bbox.minX + 2 * padX;
-        const rangeY = bbox.maxY - bbox.minY + 2 * padY;
-
-        const scaleX = width / rangeX;
-        const scaleY = height / rangeY;
-        const targetScale = Math.min(scaleX, scaleY);
-        const targetOffsetX = width / 2 - ((bbox.minX + bbox.maxX) / 2) * targetScale;
-        const targetOffsetY = height / 2 - ((bbox.minY + bbox.maxY) / 2) * targetScale;
-
-        // Apply EMA smoothing for zoom transitions — avoids jarring jumps
-        if (smoothScale === null) {
-            // First frame: snap immediately
-            smoothScale = targetScale;
-            smoothOffsetX = targetOffsetX;
-            smoothOffsetY = targetOffsetY;
-        } else {
-            smoothScale = smoothScale + ZOOM_SMOOTH_ALPHA * (targetScale - smoothScale);
-            smoothOffsetX =
-                (smoothOffsetX ?? targetOffsetX) +
-                ZOOM_SMOOTH_ALPHA * (targetOffsetX - (smoothOffsetX ?? targetOffsetX));
-            smoothOffsetY =
-                (smoothOffsetY ?? targetOffsetY) +
-                ZOOM_SMOOTH_ALPHA * (targetOffsetY - (smoothOffsetY ?? targetOffsetY));
-        }
-
+        const ahead = lookaheadPoints(local, currentIndex).map(p => rotateToHeadingUp(p, heading));
+        const targetScale = computeViewScale({
+            points: ahead,
+            width,
+            height,
+            zoomRangeMeters: state.zoomRangeMeters,
+        });
+        smoothScale =
+            smoothScale === null
+                ? targetScale
+                : smoothScale + ZOOM_SMOOTH_ALPHA * (targetScale - smoothScale);
         const scale = smoothScale;
-        const offsetX = smoothOffsetX ?? targetOffsetX;
-        const offsetY = smoothOffsetY ?? targetOffsetY;
 
-        function toCanvas(p: Point): Point {
-            return {
-                x: p.x * scale + offsetX,
-                y: p.y * scale + offsetY,
-            };
-        }
+        const toView = (p: Point): Point => ({ x: p.x * scale, y: p.y * scale });
+        const viewPoints = local.map(toView);
+
+        // Heading-up: put the user at the anchor and rotate the world about them
+        ctx.save();
+        ctx.translate(width / 2, height * ANCHOR_Y);
+        ctx.rotate((-heading * Math.PI) / 180);
 
         // --- Draw walked portion (grey) using Catmull-Rom spline ---
-        // Walked: from trail[0] up to currentIndex (inclusive)
-        if (currentIndex > 0) {
-            const walkedPts = projected
-                .slice(0, Math.min(currentIndex + 1, projected.length))
-                .map(toCanvas);
+        // Everything up to the last crumb the user has reached. The leg they are walking now
+        // (last reached crumb -> target) belongs to the route still to go, so it is blue.
+        const reached = Math.min(currentIndex, viewPoints.length);
+        if (reached > 1) {
+            const walkedPts = viewPoints.slice(0, reached);
 
             ctx.beginPath();
             ctx.strokeStyle = WALKED_COLOR;
@@ -320,9 +291,8 @@ export function createTrailRenderer({ canvas }: TrailRendererOptions): TrailRend
         }
 
         // --- Draw remaining portion (blue) using Catmull-Rom spline ---
-        // Remaining: from trail[currentIndex] to end
         if (currentIndex < trail.length) {
-            const remainingPts = projected.slice(currentIndex).map(toCanvas);
+            const remainingPts = viewPoints.slice(Math.max(currentIndex - 1, 0));
 
             ctx.beginPath();
             ctx.strokeStyle = REMAINING_COLOR;
@@ -335,21 +305,39 @@ export function createTrailRenderer({ canvas }: TrailRendererOptions): TrailRend
             ctx.stroke();
         }
 
-        // --- Draw current position dot ---
-        if (currentPt) {
-            const cp = toCanvas(currentPt);
+        // --- Stretches recorded without GPS: dashed straight lines over the top ---
+        const gaps = (state.gapSegments ?? []).filter(k => k >= 0 && k + 1 < viewPoints.length);
+        if (gaps.length > 0) {
+            ctx.strokeStyle = GAP_COLOR;
+            ctx.lineWidth = TRAIL_LINE_WIDTH;
+            ctx.lineCap = 'butt';
+            ctx.setLineDash([10, 8]);
+            for (const k of gaps) {
+                ctx.beginPath();
+                ctx.moveTo(viewPoints[k].x, viewPoints[k].y);
+                ctx.lineTo(viewPoints[k + 1].x, viewPoints[k + 1].y);
+                ctx.stroke();
+            }
+            ctx.setLineDash([]);
+        }
+
+        // --- Off the route: dashed guide from the user to the nearest point of it ---
+        if (state.guidePoint) {
+            const guide = toView(projectToLocal(state.guidePoint, anchor));
             ctx.beginPath();
-            ctx.arc(cp.x, cp.y, 8, 0, Math.PI * 2);
-            ctx.fillStyle = state.isOffRoute ? POSITION_DOT_OFF_ROUTE_COLOR : POSITION_DOT_COLOR;
-            ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = GUIDE_COLOR;
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'butt';
+            ctx.setLineDash([6, 6]);
+            ctx.moveTo(0, 0);
+            ctx.lineTo(guide.x, guide.y);
             ctx.stroke();
+            ctx.setLineDash([]);
         }
 
         // --- Draw next target waypoint ---
-        if (currentIndex < projected.length) {
-            const tp = toCanvas(projected[currentIndex]);
+        if (currentIndex < viewPoints.length) {
+            const tp = viewPoints[currentIndex];
             ctx.beginPath();
             ctx.arc(tp.x, tp.y, 6, 0, Math.PI * 2);
             ctx.fillStyle = '#f59e0b'; // amber
@@ -359,11 +347,11 @@ export function createTrailRenderer({ canvas }: TrailRendererOptions): TrailRend
             ctx.stroke();
         }
 
-        // --- Draw landmark markers (purple diamonds with labels) ---
+        // --- Draw landmark markers (purple diamonds with upright labels) ---
         for (let i = 0; i < trail.length; i++) {
             if (!trail[i].label) continue;
-            const lp = toCanvas(projected[i]);
-            const size = 7;
+            const lp = viewPoints[i];
+            const size = 9;
             ctx.beginPath();
             ctx.moveTo(lp.x, lp.y - size);
             ctx.lineTo(lp.x + size, lp.y);
@@ -376,11 +364,28 @@ export function createTrailRenderer({ canvas }: TrailRendererOptions): TrailRend
             ctx.lineWidth = 2;
             ctx.stroke();
 
-            // Draw label text above the diamond
-            ctx.font = '11px system-ui, sans-serif';
+            // Counter-rotate so the label reads upright whichever way the view is turned
+            ctx.save();
+            ctx.translate(lp.x, lp.y);
+            ctx.rotate((heading * Math.PI) / 180);
+            ctx.font = 'bold 14px system-ui, sans-serif';
             ctx.textAlign = 'center';
+            ctx.shadowColor = '#ffffff';
+            ctx.shadowBlur = 5;
             ctx.fillStyle = LANDMARK_COLOR;
-            ctx.fillText(trail[i].label!, lp.x, lp.y - size - 4);
+            ctx.fillText(trail[i].label!, 0, -size - 6);
+            ctx.restore();
+        }
+
+        // --- Draw the user last, on top, always at the fixed anchor ---
+        if (currentPosition) {
+            ctx.beginPath();
+            ctx.arc(0, 0, 9, 0, Math.PI * 2);
+            ctx.fillStyle = state.isOffRoute ? POSITION_DOT_OFF_ROUTE_COLOR : POSITION_DOT_COLOR;
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3;
+            ctx.stroke();
         }
 
         // Restore canvas transform (undo heading-up rotation)

@@ -74,7 +74,7 @@ async function seedRoutes(
 ): Promise<void> {
     await page.evaluate(async routes => {
         return new Promise<void>((resolve, reject) => {
-            const request = indexedDB.open('breadcrumbs', 2);
+            const request = indexedDB.open('breadcrumbs', 3);
             request.onupgradeneeded = () => {
                 const db = request.result;
                 if (!db.objectStoreNames.contains('sessions')) {
@@ -82,6 +82,9 @@ async function seedRoutes(
                 }
                 if (!db.objectStoreNames.contains('routes')) {
                     db.createObjectStore('routes', { keyPath: 'id' });
+                }
+                if (!db.objectStoreNames.contains('crumbs')) {
+                    db.createObjectStore('crumbs', { autoIncrement: true });
                 }
             };
             request.onsuccess = () => {
@@ -192,8 +195,8 @@ test.describe('UI Screenshot Capture - Pixel 7a', () => {
         await expect(page.locator('#btn-confirm-yes')).toBeEnabled({ timeout: 3000 });
         await page.click('#btn-confirm-yes');
 
-        // Wait for simple navigation view to appear
-        await expect(page.locator('#simple-nav')).toBeVisible({ timeout: 5000 });
+        // Wait for the navigation screen to appear
+        await expect(page.locator('#nav-panel')).toBeVisible({ timeout: 5000 });
         await expect(page.locator('#nav-progress-text')).not.toHaveText('Loading\u2026');
 
         // Send a GPS position so the distance shows a real value
@@ -223,7 +226,7 @@ test.describe('UI Screenshot Capture - Pixel 7a', () => {
         });
         await expect(page.locator('#btn-confirm-yes')).toBeEnabled({ timeout: 3000 });
         await page.click('#btn-confirm-yes');
-        await expect(page.locator('#simple-nav')).toBeVisible({ timeout: 5000 });
+        await expect(page.locator('#nav-panel')).toBeVisible({ timeout: 5000 });
         await expect(page.locator('#nav-progress-text')).not.toHaveText('Loading\u2026');
 
         // Send position at same coords — should trigger "arrived"
@@ -310,6 +313,70 @@ test.describe('UI Screenshot Capture - Pixel 7a', () => {
         });
     });
 
+    /** A crumb x m east and y m north of the London start. */
+    const at = (x: number, y: number) => ({
+        lat: 51.5074 + y / 111195,
+        lng: -0.1278 + x / (111195 * Math.cos((51.5074 * Math.PI) / 180)),
+        accuracy: 5,
+        timestamp: Date.now(),
+    });
+
+    /** A saved route: 120 m north then 120 m east, a crumb every 10 m. */
+    const lRoute = [
+        ...Array.from({ length: 13 }, (_, i) => at(0, i * 10)),
+        ...Array.from({ length: 12 }, (_, i) => at((i + 1) * 10, 120)),
+    ];
+
+    async function followLRoute(page: Page): Promise<void> {
+        await page.goto('/');
+        await seedRoutes(page, [
+            {
+                id: 'route-l',
+                name: 'Park loop',
+                date: Date.now(),
+                distance: 240,
+                breadcrumbCount: lRoute.length,
+                breadcrumbs: lRoute,
+            },
+        ]);
+        await expect(page.locator('#status-text')).toHaveText('Requesting location access…', {
+            timeout: 5000,
+        });
+        await page.click('#btn-view-routes');
+        await page.click('[data-action="follow"]');
+        await expect(page.locator('#nav-panel')).toBeVisible({ timeout: 5000 });
+    }
+
+    test('9 - Navigation mid-route with a turn coming up', async ({ page }) => {
+        await followLRoute(page);
+
+        // Walk north along the first leg, a fix every metre or so, towards the corner
+        for (let y = 0; y <= 90; y += 6) await sendGPS(page, at(0, y).lat, at(0, y).lng);
+        await expect(page.locator('#nav-next-turn')).toBeVisible({ timeout: 3000 });
+        await expect(page.locator('#nav-next-turn')).toContainText('Turn right');
+
+        await page.screenshot({
+            path: path.join(SCREENSHOT_DIR, '09-navigation-turn-ahead.png'),
+            fullPage: true,
+        });
+    });
+
+    test('10 - Navigation off the route', async ({ page }) => {
+        await followLRoute(page);
+
+        for (let y = 0; y <= 40; y += 8) await sendGPS(page, at(0, y).lat, at(0, y).lng);
+        // Wander 60 m east of the path
+        for (let i = 0; i < 4; i++) await sendGPS(page, at(60, 45).lat, at(60, 45).lng);
+        await expect(page.locator('#nav-recovery-hint')).toContainText('Off trail', {
+            timeout: 3000,
+        });
+
+        await page.screenshot({
+            path: path.join(SCREENSHOT_DIR, '10-navigation-off-route.png'),
+            fullPage: true,
+        });
+    });
+
     test('7 - Save route modal', async ({ page }) => {
         await page.goto('/');
         await expect(page.locator('#status-text')).toHaveText('Requesting location access\u2026', {
@@ -321,8 +388,6 @@ test.describe('UI Screenshot Capture - Pixel 7a', () => {
         await expect(page.locator('#status-text')).toHaveText('Recording...', { timeout: 5000 });
         await sendGPS(page, POS_B.lat, POS_B.lng);
 
-        // Click "Save this route" from the simple-mode More panel
-        await page.click('#btn-simple-more');
         await page.click('#btn-save-route');
 
         // Wait for modal to appear
