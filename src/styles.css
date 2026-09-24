@@ -340,6 +340,20 @@ main {
     display: none;
 }
 
+.keep-open-hint {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    background: var(--color-status-stationary-bg);
+    color: var(--color-status-stationary-text);
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+.keep-open-hint[hidden] {
+    display: none;
+}
+
 .status-dot {
     width: 12px;
     height: 12px;
@@ -1047,7 +1061,8 @@ footer .btn {
 .screen-lock-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.7);
+    /* Fully black: the screen stays awake (wake lock) but OLED pixels are off, saving battery. */
+    background: #000;
     z-index: 50;
     display: flex;
     align-items: center;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
     createGeolocationService,
     type ErrorCallback,
@@ -7,6 +7,24 @@ import {
     medianFix,
 } from '@/gps';
 import { haversineMeters } from '@/geo';
+
+// Every service created by a test is stopped afterwards so its timers and document
+// listeners (watchdog, visibilitychange) cannot leak into later tests.
+const createdServices = vi.hoisted(() => [] as Array<{ stop(): void }>);
+vi.mock('@/gps', async importOriginal => {
+    const actual = await importOriginal<typeof import('@/gps')>();
+    return {
+        ...actual,
+        createGeolocationService: (...args: Parameters<typeof actual.createGeolocationService>) => {
+            const service = actual.createGeolocationService(...args);
+            createdServices.push(service);
+            return service;
+        },
+    };
+});
+afterEach(() => {
+    for (const service of createdServices.splice(0)) service.stop();
+});
 
 function makePosition(
     lat: number,
@@ -941,5 +959,99 @@ describe('GeolocationService – noise rejection when recording', () => {
             [51.5012, -0.1, 5, 8000], // ~110 m in 5 s: implausible but not a dropout
         ]) as Array<{ gap?: boolean }>;
         expect(crumbs.some(c => c.gap === true)).toBe(false);
+    });
+});
+
+describe('GeolocationService – watchdog', () => {
+    let watchPosition: ReturnType<typeof vi.fn>;
+    let clearWatch: ReturnType<typeof vi.fn>;
+    let watchCallback: PositionCallback;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        watchPosition = vi.fn((success: PositionCallback) => {
+            watchCallback = success;
+            return watchPosition.mock.calls.length;
+        });
+        clearWatch = vi.fn();
+        vi.stubGlobal('navigator', { geolocation: { watchPosition, clearWatch } });
+        return () => {
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+        };
+    });
+
+    function startService() {
+        const service = createGeolocationService({ disableMotionSuspension: true });
+        const onLost = vi.fn();
+        service.onGpsLostChange = onLost;
+        service.start(vi.fn());
+        return { service, onLost };
+    }
+
+    it('does not restart while waiting for the first fix (e.g. a permission prompt)', () => {
+        const { service, onLost } = startService();
+        vi.advanceTimersByTime(120_000);
+        expect(watchPosition).toHaveBeenCalledTimes(1);
+        expect(onLost).not.toHaveBeenCalled();
+        service.stop();
+    });
+
+    it('restarts the watcher and reports loss when fixes stop, then recovers on the next fix', () => {
+        const { service, onLost } = startService();
+        watchCallback(makePosition(51.5, -0.1, 5, Date.now()));
+
+        vi.advanceTimersByTime(25_000);
+        expect(watchPosition).toHaveBeenCalledTimes(2);
+        expect(clearWatch).toHaveBeenCalledTimes(1);
+        expect(onLost).toHaveBeenCalledWith(true);
+        expect(service.isGpsLost).toBe(true);
+
+        watchCallback(makePosition(51.5, -0.1, 5, Date.now()));
+        expect(onLost).toHaveBeenLastCalledWith(false);
+        expect(service.isGpsLost).toBe(false);
+        service.stop();
+    });
+
+    it('keeps the same options when restarting', () => {
+        const { service } = startService();
+        watchCallback(makePosition(51.5, -0.1, 5, Date.now()));
+        vi.advanceTimersByTime(25_000);
+        expect(watchPosition.mock.calls[1][2]).toEqual(watchPosition.mock.calls[0][2]);
+        service.stop();
+    });
+
+    it('waits a full stall period between restart attempts', () => {
+        const { service } = startService();
+        watchCallback(makePosition(51.5, -0.1, 5, Date.now()));
+        vi.advanceTimersByTime(60_000);
+        expect(watchPosition.mock.calls.length).toBeLessThanOrEqual(4);
+        service.stop();
+    });
+
+    it('restarts immediately on returning to the foreground after a quiet spell', () => {
+        const { service } = startService();
+        watchCallback(makePosition(51.5, -0.1, 5, Date.now()));
+        vi.advanceTimersByTime(8_000); // quiet but below the stall limit
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(watchPosition).toHaveBeenCalledTimes(2);
+        service.stop();
+    });
+
+    it('does not restart on foregrounding when fixes are flowing', () => {
+        const { service } = startService();
+        watchCallback(makePosition(51.5, -0.1, 5, Date.now()));
+        vi.advanceTimersByTime(2_000);
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(watchPosition).toHaveBeenCalledTimes(1);
+        service.stop();
+    });
+
+    it('stops watching for stalls after stop()', () => {
+        const { service } = startService();
+        watchCallback(makePosition(51.5, -0.1, 5, Date.now()));
+        service.stop();
+        vi.advanceTimersByTime(120_000);
+        expect(watchPosition).toHaveBeenCalledTimes(1);
     });
 });

@@ -188,6 +188,9 @@ function renderFullRecordingView(): string {
                     <span class="recording-compact__dist" id="distance-walked">0 m</span>
                 </div>
                 <p class="route-quality route-quality--hidden" id="route-quality" aria-live="polite"></p>
+                <p class="keep-open-hint" id="keep-open-hint" hidden>
+                    Keep this app open with the screen on, or the route may stop recording.
+                </p>
             </div>
             <div class="actions" role="group" aria-label="Route actions">
                 <button
@@ -263,6 +266,9 @@ function renderSimpleRecordingView(): string {
                 Stationary
             </div>
             <p class="route-quality route-quality--hidden" id="route-quality" aria-live="polite"></p>
+            <p class="keep-open-hint" id="keep-open-hint" hidden>
+                    Keep this app open with the screen on, or the route may stop recording.
+                </p>
             <button
                 class="btn btn--secondary simple-location-retry"
                 id="btn-location-retry"
@@ -1568,12 +1574,13 @@ export function openConfirmDialog(
     message: string,
     confirmLabel: string,
     onConfirm: () => void,
-    options?: { delay?: number }
+    options?: { delay?: number; cancelLabel?: string; onCancel?: () => void }
 ): void {
     if (modalOpen) return;
     modalOpen = true;
 
     const delayMs = options?.delay ?? 0;
+    const cancelLabel = options?.cancelLabel ?? 'Cancel';
 
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
@@ -1587,7 +1594,7 @@ export function openConfirmDialog(
             <p class="confirm-dialog-text">${escapeHtml(message)}</p>
             <div class="modal-actions">
                 <button class="btn btn--primary${delayMs > 0 ? ' btn--delayed' : ''}" id="btn-confirm-yes" aria-label="${escapeHtml(confirmLabel)}"${delayMs > 0 ? ' disabled' : ''}>${delayMs > 0 ? 'Wait\u2026' : escapeHtml(confirmLabel)}</button>
-                <button class="btn btn--secondary" id="btn-confirm-cancel" aria-label="Cancel">Cancel</button>
+                <button class="btn btn--secondary" id="btn-confirm-cancel" aria-label="${escapeHtml(cancelLabel)}">${escapeHtml(cancelLabel)}</button>
             </div>
         </div>
     `;
@@ -1606,8 +1613,13 @@ export function openConfirmDialog(
         }, delayMs);
     }
 
+    function cancelDialog(): void {
+        closeDialog();
+        options?.onCancel?.();
+    }
+
     function handleKeydown(e: KeyboardEvent): void {
-        if (e.key === 'Escape') closeDialog();
+        if (e.key === 'Escape') cancelDialog();
     }
 
     function closeDialog(): void {
@@ -1620,10 +1632,10 @@ export function openConfirmDialog(
     document.addEventListener('keydown', handleKeydown);
 
     const cancelBtn = backdrop.querySelector<HTMLButtonElement>('#btn-confirm-cancel');
-    if (cancelBtn) cancelBtn.addEventListener('click', closeDialog);
+    if (cancelBtn) cancelBtn.addEventListener('click', cancelDialog);
 
     backdrop.addEventListener('click', (e: MouseEvent) => {
-        if (e.target === backdrop) closeDialog();
+        if (e.target === backdrop) cancelDialog();
     });
 
     if (confirmBtn) {
@@ -1802,6 +1814,34 @@ function createScreenLock(root: HTMLElement): { destroy: () => void } {
     return { destroy };
 }
 
+/** A saved-but-unfinished route older than this is not silently continued. */
+const STALE_SESSION_MS = 2 * 60 * 60 * 1000;
+
+export function formatAge(ms: number): string {
+    const minutes = Math.floor(ms / 60_000);
+    if (minutes < 60) return `${String(Math.max(minutes, 1))} minutes ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) return hours === 1 ? '1 hour ago' : `${String(hours)} hours ago`;
+    return `${String(Math.floor(hours / 24))} days ago`;
+}
+
+/** Ask whether to keep adding to an old unsaved route. Resolves true to keep it. */
+function askKeepStaleSession(ageMs: number, meters: number): Promise<boolean> {
+    return new Promise(resolve => {
+        if (modalOpen) {
+            resolve(true);
+            return;
+        }
+        openConfirmDialog(
+            'Old route found',
+            `You have an unsaved route from ${formatAge(ageMs)} (${formatDistance(meters)}). Start a new route from here, or keep adding to the old one?`,
+            'Start new route',
+            () => resolve(false),
+            { cancelLabel: 'Keep old route', onCancel: () => resolve(true) }
+        );
+    });
+}
+
 export function startRecording(root: HTMLElement): void {
     activeRecordingCleanup?.();
     activeRecordingCleanup = null;
@@ -1824,16 +1864,42 @@ export function startRecording(root: HTMLElement): void {
 
     setStatusRequesting(root);
     let gotResponse = false;
-    const requestTimeout = setTimeout(() => {
-        if (!gotResponse) {
-            setStatusError(
-                root,
-                'Location access timed out. Check browser permissions and try reloading.'
-            );
-        }
-    }, 10_000);
+    let requestTimeout: ReturnType<typeof setTimeout> | null = null;
+    function clearRequestTimeout(): void {
+        if (requestTimeout !== null) clearTimeout(requestTimeout);
+        requestTimeout = null;
+    }
+    function armRequestTimeout(): void {
+        if (requestTimeout !== null || gotResponse) return;
+        requestTimeout = setTimeout(() => {
+            if (!gotResponse) {
+                setStatusError(
+                    root,
+                    'Location access timed out. Check browser permissions and try reloading.'
+                );
+            }
+        }, 10_000);
+    }
+    // Don't count the time the user spends reading the permission prompt as a timeout.
+    if (navigator.permissions?.query) {
+        navigator.permissions
+            .query({ name: 'geolocation' })
+            .then(status => {
+                if (status.state === 'prompt') {
+                    status.onchange = () => {
+                        if (status.state !== 'prompt') armRequestTimeout();
+                    };
+                } else {
+                    armRequestTimeout();
+                }
+            })
+            .catch(armRequestTimeout);
+    } else {
+        armRequestTimeout();
+    }
 
     const gps = createGeolocationService();
+    const wakeLock = createWakeLockManager();
     let breadcrumbCount = 0;
     let totalMeters = 0;
     let lastBreadcrumb: Breadcrumb | null = null;
@@ -1857,6 +1923,7 @@ export function startRecording(root: HTMLElement): void {
 
     function cleanupRecording(): void {
         gps.stop();
+        wakeLock.destroy();
         if (timerInterval !== null) {
             clearInterval(timerInterval);
             timerInterval = null;
@@ -1871,6 +1938,30 @@ export function startRecording(root: HTMLElement): void {
     }
 
     activeRecordingCleanup = cleanupRecording;
+
+    // Keep the screen on so the browser keeps delivering GPS fixes; warn if it can't.
+    function refreshKeepOpenHint(): void {
+        const hint = root.querySelector<HTMLElement>('#keep-open-hint');
+        if (hint) hint.hidden = wakeLock.isActive;
+    }
+    wakeLock
+        .acquire()
+        .then(refreshKeepOpenHint)
+        .catch(() => {
+            refreshKeepOpenHint();
+        });
+
+    gps.onGpsLostChange = (lost: boolean) => {
+        if (lost) {
+            updateRouteQuality(root, 'Lost GPS - reconnecting. Keep this app open.', true);
+        } else {
+            updateRouteQuality(root, 'GPS is back.');
+            setTimeout(() => updateRouteQuality(root, null), 4000);
+        }
+    };
+
+    // Ask the browser not to evict the saved route under storage pressure.
+    navigator.storage?.persist?.().catch(() => {});
 
     function startStatsTimer(): void {
         if (timerInterval !== null) return;
@@ -1964,9 +2055,22 @@ export function startRecording(root: HTMLElement): void {
         }
     }
 
-    getSession()
-        .then(session => {
+    // Crumbs are only persisted once this settles, so a stale-session choice can't race them.
+    const sessionReady: Promise<void> = getSession()
+        .then(async session => {
             if (!session || session.breadcrumbs.length === 0) return;
+            const lastCrumb = session.breadcrumbs[session.breadcrumbs.length - 1];
+            const ageMs = Date.now() - lastCrumb.timestamp;
+            if (ageMs > STALE_SESSION_MS) {
+                const keep = await askKeepStaleSession(
+                    ageMs,
+                    trailDistanceMeters(session.breadcrumbs)
+                );
+                if (!keep) {
+                    await clearSession();
+                    return;
+                }
+            }
             restoredExistingSession = true;
             breadcrumbCount = session.breadcrumbs.length;
             totalMeters = trailDistanceMeters(session.breadcrumbs);
@@ -2010,7 +2114,7 @@ export function startRecording(root: HTMLElement): void {
         );
         if (breadcrumbCount === 0) {
             gotResponse = true;
-            clearTimeout(requestTimeout);
+            clearRequestTimeout();
             setStatusGpsWeak(root);
         }
     };
@@ -2019,8 +2123,9 @@ export function startRecording(root: HTMLElement): void {
         async (breadcrumb: Breadcrumb) => {
             if (!gotResponse) {
                 gotResponse = true;
-                clearTimeout(requestTimeout);
+                clearRequestTimeout();
             }
+            await sessionReady;
             try {
                 await appendBreadcrumb(breadcrumb);
             } catch (e) {
@@ -2083,7 +2188,7 @@ export function startRecording(root: HTMLElement): void {
         },
         (error: GeolocationPositionError) => {
             gotResponse = true;
-            clearTimeout(requestTimeout);
+            clearRequestTimeout();
             if (timerInterval !== null) {
                 clearInterval(timerInterval);
                 timerInterval = null;

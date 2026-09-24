@@ -1,5 +1,7 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { openDB } from 'idb';
+import { IDBFactory } from 'fake-indexeddb';
 import {
     appendBreadcrumb,
     getSession,
@@ -166,5 +168,124 @@ describe('storage - updateLastBreadcrumb', () => {
 
         const session = await getSession();
         expect(session!.breadcrumbs[0].label).toBe('Steps');
+    });
+});
+
+describe('storage - per-crumb session records', () => {
+    it('stores each crumb as its own record and keeps only bookkeeping in the session record', async () => {
+        await appendBreadcrumb(crumb1);
+        await appendBreadcrumb(crumb2);
+
+        const db = await openDB('breadcrumbs');
+        expect(await db.count('crumbs')).toBe(2);
+        const meta = (await db.get('sessions', 'current')) as Record<string, unknown>;
+        expect(meta).toEqual({ id: 'current', startedAt: crumb1.timestamp });
+        db.close();
+    });
+
+    it('keeps a burst of unawaited appends in call order', async () => {
+        const crumbs: Breadcrumb[] = Array.from({ length: 60 }, (_, i) => ({
+            lat: 51.5 + i * 0.0001,
+            lng: -0.1,
+            accuracy: 5,
+            timestamp: 1000 + i,
+        }));
+        await Promise.all(crumbs.map(c => appendBreadcrumb(c)));
+
+        const session = await getSession();
+        expect(session?.breadcrumbs).toEqual(crumbs);
+    });
+
+    it('a read straight after an unawaited append sees it', async () => {
+        void appendBreadcrumb(crumb1);
+        const session = await getSession();
+        expect(session?.breadcrumbs).toEqual([crumb1]);
+    });
+
+    it('clearSession removes every crumb so the next session starts empty', async () => {
+        await appendBreadcrumb(crumb1);
+        await appendBreadcrumb(crumb2);
+        await clearSession();
+
+        await appendBreadcrumb({ ...crumb1, timestamp: 9000 });
+        const session = await getSession();
+        expect(session?.breadcrumbs).toHaveLength(1);
+        expect(session?.startedAt).toBe(9000);
+    });
+
+    it('round-trips optional fields such as labels and gap flags', async () => {
+        const gapCrumb: Breadcrumb = { ...crumb2, gap: true, label: 'Bridge' };
+        await appendBreadcrumb(crumb1);
+        await appendBreadcrumb(gapCrumb);
+        expect((await getSession())?.breadcrumbs[1]).toEqual(gapCrumb);
+    });
+
+    it('updateLastBreadcrumb edits only the newest crumb', async () => {
+        await appendBreadcrumb(crumb1);
+        await appendBreadcrumb(crumb2);
+        const updated = await updateLastBreadcrumb(b => ({ ...b, label: 'Cafe' }));
+
+        expect(updated?.label).toBe('Cafe');
+        const session = await getSession();
+        expect(session?.breadcrumbs[0]).toEqual(crumb1);
+        expect(session?.breadcrumbs[1].label).toBe('Cafe');
+    });
+
+    it('updateLastBreadcrumb returns null when there is nothing to update', async () => {
+        expect(await updateLastBreadcrumb(b => b)).toBeNull();
+    });
+});
+
+describe('storage - migration from the single-record session format', () => {
+    const realIndexedDB = globalThis.indexedDB;
+
+    beforeEach(() => {
+        globalThis.indexedDB = new IDBFactory();
+        vi.resetModules();
+    });
+
+    afterEach(() => {
+        globalThis.indexedDB = realIndexedDB;
+        vi.resetModules();
+    });
+
+    async function createLegacyDb(session?: unknown): Promise<void> {
+        const legacy = await openDB('breadcrumbs', 2, {
+            upgrade(db) {
+                db.createObjectStore('sessions', { keyPath: 'id' });
+                db.createObjectStore('routes', { keyPath: 'id' });
+            },
+        });
+        if (session) await legacy.put('sessions', session);
+        await legacy.put('routes', route1);
+        legacy.close();
+    }
+
+    it('moves crumbs out of the old session record without losing any', async () => {
+        await createLegacyDb({ id: 'current', startedAt: 500, breadcrumbs: [crumb1, crumb2] });
+
+        const storage = await import('@/storage');
+        const session = await storage.getSession();
+        expect(session?.startedAt).toBe(500);
+        expect(session?.breadcrumbs).toEqual([crumb1, crumb2]);
+
+        await storage.appendBreadcrumb({ ...crumb1, timestamp: 3000 });
+        expect((await storage.getSession())?.breadcrumbs).toHaveLength(3);
+    });
+
+    it('keeps saved routes through the upgrade', async () => {
+        await createLegacyDb({ id: 'current', startedAt: 500, breadcrumbs: [crumb1] });
+
+        const storage = await import('@/storage');
+        expect(await storage.listRoutes()).toEqual([route1]);
+    });
+
+    it('upgrades a database that has no session', async () => {
+        await createLegacyDb();
+
+        const storage = await import('@/storage');
+        expect(await storage.getSession()).toBeUndefined();
+        await storage.appendBreadcrumb(crumb1);
+        expect((await storage.getSession())?.breadcrumbs).toEqual([crumb1]);
     });
 });

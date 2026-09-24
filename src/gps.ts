@@ -12,6 +12,12 @@ const MAX_ACCURACY_METERS = 30;
 const GAP_MIN_MS = 30_000;
 const GAP_MIN_DISTANCE_METERS = 60;
 
+/** No fix for this long (after the first one) means the watcher has stalled: restart it. */
+const STALL_MS = 20_000;
+const WATCHDOG_INTERVAL_MS = 5_000;
+/** On returning to the foreground, restart the watcher if it has been quiet this long. */
+const RESUME_STALE_MS = 5_000;
+
 /** Number of recent fixes whose per-axis median is recorded (rejects isolated spikes). */
 const MEDIAN_WINDOW = 3;
 /** A pause longer than this between fixes starts the median window afresh. */
@@ -108,6 +114,10 @@ export interface GeolocationService {
     onSuspendedChange: ((suspended: boolean) => void) | null;
     /** Called when a GPS fix is too inaccurate to trust for breadcrumb recording. */
     onPoorAccuracy: ((accuracy: number) => void) | null;
+    /** Called with true when fixes stop arriving (watcher restarted), false when they resume. */
+    onGpsLostChange: ((lost: boolean) => void) | null;
+    /** True while fixes have stopped arriving. */
+    readonly isGpsLost: boolean;
     /** Switch enableHighAccuracy on the fly (restarts the GPS watcher). */
     setHighAccuracy(value: boolean): void;
 }
@@ -127,6 +137,14 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
     let lastRawTimestamp: number | null = null;
     let currentMovementBearing: number | null = null;
     let currentSpeedMs: number | null = null;
+
+    // Watchdog: browsers throttle or silently stop watchPosition (screen lock, backgrounding)
+    let lastFixWallClock = 0;
+    let hasFix = false;
+    let gpsLost = false;
+    let onGpsLostChange: ((lost: boolean) => void) | null = null;
+    let currentWatchOptions: PositionOptions = { enableHighAccuracy: true };
+    let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 
     // Set when a GPS dropout is detected; attached to the next recorded crumb
     let pendingGap = false;
@@ -157,8 +175,15 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
         onError: ErrorCallback | undefined,
         options: PositionOptions
     ): void {
+        currentWatchOptions = options;
         watchId = navigator.geolocation.watchPosition(
             position => {
+                lastFixWallClock = Date.now();
+                hasFix = true;
+                if (gpsLost) {
+                    gpsLost = false;
+                    onGpsLostChange?.(false);
+                }
                 const { latitude, longitude, accuracy } = position.coords;
                 const now = position.timestamp;
 
@@ -343,9 +368,49 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
         }
 
         startWatcher(onBreadcrumb, onError, { enableHighAccuracy: true });
+        hasFix = false;
+        gpsLost = false;
+        lastFixWallClock = Date.now();
+        watchdogTimer = setInterval(checkWatchdog, WATCHDOG_INTERVAL_MS);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    /** Restart the watcher with the options it was last started with. */
+    function restartWatcher(): void {
+        if (!savedOnBreadcrumb) return;
+        if (watchId !== null) {
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+        }
+        startWatcher(savedOnBreadcrumb, savedOnError, currentWatchOptions);
+    }
+
+    function checkWatchdog(): void {
+        // Only after the first fix (a pending permission prompt is not a stall), and never
+        // while deliberately suspended.
+        if (!hasFix || watchId === null || suspended) return;
+        if (Date.now() - lastFixWallClock <= STALL_MS) return;
+        if (!gpsLost) {
+            gpsLost = true;
+            onGpsLostChange?.(true);
+        }
+        // Wait a full stall period before the next restart attempt
+        lastFixWallClock = Date.now();
+        restartWatcher();
+    }
+
+    function handleVisibilityChange(): void {
+        if (document.visibilityState !== 'visible') return;
+        if (!hasFix || watchId === null || suspended) return;
+        if (Date.now() - lastFixWallClock > RESUME_STALE_MS) restartWatcher();
     }
 
     function stop(): void {
+        if (watchdogTimer !== null) {
+            clearInterval(watchdogTimer);
+            watchdogTimer = null;
+        }
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
         if (motion) {
             motion.stop();
             motion.onMotionlessChange = null;
@@ -391,6 +456,15 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
         },
         set onSuspendedChange(cb: ((suspended: boolean) => void) | null) {
             onSuspendedChange = cb;
+        },
+        get isGpsLost() {
+            return gpsLost;
+        },
+        get onGpsLostChange() {
+            return onGpsLostChange;
+        },
+        set onGpsLostChange(cb: ((lost: boolean) => void) | null) {
+            onGpsLostChange = cb;
         },
         get onPoorAccuracy() {
             return onPoorAccuracy;

@@ -124,21 +124,22 @@ Corrections to the original analysis:
 
 - Loops and out-and-back routes do NOT end early in practice: at 8 m accuracy every scenario arrives within ~20 m of the real start. Skip-ahead does shortcut whole legs when the path passes within the proximity radius (e.g. 15 m hairpin skips ~700 m). That is a shortcut only if the ground between is walkable, so it is a product decision for Phase 13 rather than a definite bug. Phase 13 should still add forward-only windowed progress and a stricter arrival test.
 
-### Phase 11: Trustworthy Recording
+### Phase 11: Trustworthy Recording - DONE (two items deferred)
 
 Goal: never lose or corrupt the trail. PWA-only: assume the app stays open in the foreground with the screen on.
 
-- [ ] Acquire the Wake Lock while recording (currently navigation only); re-acquire on `visibilitychange`; show a clear "keep app open" hint if the lock is unavailable
-- [ ] Add a dim/black "battery saver" overlay (OLED-friendly) that keeps the screen on but near-black; tap-and-hold to wake
-- [ ] Add a GPS watchdog in `gps.ts`: if no fix for N seconds, restart `watchPosition`; also restart on `visibilitychange` to visible; surface "Lost GPS" state to the UI
-- [ ] Flag gaps: when the time/distance since the last crumb is large, mark the crumb `gap: true` (extend `Breadcrumb`); retrace treats gap segments as straight-line and warns
-- [ ] Rewrite `storage.ts` session storage: one IndexedDB record per crumb (keyed by sequence), serialized append queue, single cached DB connection; migrate the DB version and keep old sessions readable
-- [ ] Filtering in `gps.ts`: scale the distance threshold with fix accuracy; reject implausible speed jumps (>~12 m/s walking); drop standing-still drift crumbs
-- [ ] Call `navigator.storage.persist()` on first save; show a warning if it is denied
-- [ ] Explicit session lifecycle: "Start walk" / "Set start here"; on open, if the previous session is stale (>~2h old or far from current position) ask "Continue or start new?" instead of silently appending
-- [ ] Fix the location-request timeout so it does not fire while the permission prompt is still open (`startRecording`)
-- [ ] Reconsider low-power mode: `maximumAge` does not reduce GPS power; remove or replace with a lower-rate strategy, and request iOS `DeviceMotionEvent.requestPermission` from a user gesture if motion is kept
-- [ ] Tests for watchdog restart, gap flagging, storage append ordering, stale-session prompt
+- [x] Acquire the Wake Lock while recording; re-acquire on `visibilitychange` (manager already did); show a "keep app open" hint if the lock is unavailable or refused
+- [x] Battery saver overlay: the existing 15 s screen-lock overlay is now fully black (OLED pixels off while the wake lock keeps the screen awake); press-and-hold to wake
+- [x] GPS watchdog in `gps.ts`: restart `watchPosition` after 20 s without a fix (only after the first fix, so a permission prompt is not a stall) and on returning to the foreground after 5+ s of silence; `onGpsLostChange` drives a "Lost GPS - reconnecting" message
+- [x] Flag gaps: a crumb after a >30 s silence with a >60 m jump gets `gap: true` (`Breadcrumb.gap`). Retrace does not use it yet (Phase 13)
+- [x] `storage.ts` rewritten: one IndexedDB record per crumb (DB v3, in-place migration from the single-record format), serialized write queue, one cached connection
+- [x] Recording filter in `gps.ts`: per-axis median of the last 3 fixes (rejects isolated spikes, damps drift) and crumb spacing never below the fix accuracy. Fixed: 3.3x trail inflation at 20 m accuracy, ~83-crumb cloud when standing still, 60 m spike recorded
+- [x] `navigator.storage.persist()` requested when recording starts (no UI for a denied result yet)
+- [x] Stale sessions: an unsaved route whose last crumb is over 2 hours old prompts "Start new route" / "Keep old route" instead of silently continuing; new fixes wait for the choice (no race). Escape/backdrop keeps the old route
+- [x] Location-request timeout no longer runs while the permission prompt is showing (Permissions API)
+- [x] Tests: watchdog, gap flag, median/spacing filter, storage layout/ordering/migration, stale-session dialog, wake lock, permission timeout
+- [ ] Explicit "Start walk" / "Set start here" control (auto-record on open is still the model; stale prompt covers the worst case). Revisit after field testing
+- [ ] Low-power stationary mode: `maximumAge` does not reduce GPS power, but switching to low-accuracy fixes risks false "movement" flapping. Left unchanged pending field data. iOS motion permission (`DeviceMotionEvent.requestPermission`) also still missing, so iOS never auto-suspends and shake-to-wake in pocket mode does not work there
 
 ### Phase 12: Trustworthy Heading
 
