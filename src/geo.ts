@@ -64,6 +64,70 @@ export function pointToSegmentMeters(
 }
 
 /**
+ * The point on segment segA-segB closest to `point`, and how far along the segment it is
+ * (0 at segA, 1 at segB). Uses the same local projection as pointToSegmentMeters.
+ */
+export function closestPointOnSegment(
+    point: Breadcrumb,
+    segA: Breadcrumb,
+    segB: Breadcrumb
+): { point: Breadcrumb; t: number } {
+    const cosLat = Math.cos(toRadians(segA.lat));
+    const px = (point.lng - segA.lng) * cosLat;
+    const py = point.lat - segA.lat;
+    const dx = (segB.lng - segA.lng) * cosLat;
+    const dy = segB.lat - segA.lat;
+    const segLenSq = dx * dx + dy * dy;
+    const t = segLenSq === 0 ? 0 : Math.max(0, Math.min(1, (px * dx + py * dy) / segLenSq));
+    return {
+        t,
+        point: {
+            lat: segA.lat + t * (segB.lat - segA.lat),
+            lng: segA.lng + t * (segB.lng - segA.lng),
+            accuracy: segB.accuracy,
+            timestamp: segB.timestamp,
+        },
+    };
+}
+
+/**
+ * Douglas-Peucker simplification: the indices of the points to keep so that every dropped
+ * point lies within `toleranceMeters` of the simplified line. Always keeps the first and
+ * last point. Iterative, so long trails cannot overflow the stack.
+ */
+export function simplifyPolyline(points: Breadcrumb[], toleranceMeters: number): number[] {
+    if (points.length <= 2) return points.map((_, i) => i);
+
+    const keep = new Array<boolean>(points.length).fill(false);
+    keep[0] = true;
+    keep[points.length - 1] = true;
+    const stack: Array<[number, number]> = [[0, points.length - 1]];
+
+    while (stack.length > 0) {
+        const [first, last] = stack.pop() as [number, number];
+        let worst = -1;
+        let worstDistance = toleranceMeters;
+        for (let i = first + 1; i < last; i++) {
+            const d = pointToSegmentMeters(points[i], points[first], points[last]);
+            if (d > worstDistance) {
+                worstDistance = d;
+                worst = i;
+            }
+        }
+        if (worst !== -1) {
+            keep[worst] = true;
+            stack.push([first, worst], [worst, last]);
+        }
+    }
+
+    const kept: number[] = [];
+    keep.forEach((k, i) => {
+        if (k) kept.push(i);
+    });
+    return kept;
+}
+
+/**
  * Sum of haversine distances along the trail from currentPos through
  * remaining breadcrumbs starting at trailIndex.
  * Returns the approximate walking distance left to the end of the trail.

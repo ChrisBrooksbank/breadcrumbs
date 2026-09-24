@@ -147,49 +147,71 @@ function worstCrossTrackMeters(recorded: Breadcrumb[]): number {
     return Math.max(...recorded.map(b => Math.abs((b.lng - zero.lng) * metersPerDegLng)));
 }
 
-const ARRIVAL_TOLERANCE_M = 25;
-
 /*
  * Real-world scenario harness. Each scenario records a noisy walk through the real
  * GeolocationService, then walks it back (noisily) through the real NavigationService.
- *
- * Tests written with `it.fails` document a KNOWN BUG: they pass while the bug exists and
- * start failing once it is fixed, at which point change `it.fails` to `it`.
- * The phase that should fix each one is noted in its name.
  */
-describe('retrace scenarios: arrival at the real start', () => {
+/** Retrace one scenario across many noise seeds; returns sorted distances and skips. */
+function retraceManySeeds(
+    name: keyof typeof SCENARIO_ROUTES,
+    accuracy: number,
+    seeds = 40
+): { arrivedCount: number; distances: number[]; skips: number[]; falseAlarms: number } {
+    const route = SCENARIO_ROUTES[name];
+    const distances: number[] = [];
+    const skips: number[] = [];
+    let arrivedCount = 0;
+    let falseAlarms = 0;
+    for (let seed = 1; seed <= seeds; seed++) {
+        const result = simulateRetrace(walkAndRecord(route, seed, accuracy), route, {
+            accuracy,
+            seed: seed + 100,
+        });
+        if (result.arrived) arrivedCount++;
+        distances.push(result.distanceToStartAtArrivalM);
+        skips.push(result.maxSkipM);
+        falseAlarms += result.offRouteAlerts;
+    }
+    distances.sort((a, b) => a - b);
+    skips.sort((a, b) => a - b);
+    return { arrivedCount, distances, skips, falseAlarms };
+}
+
+const percentile = (sorted: number[], p: number): number =>
+    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+
+/*
+ * With GPS error the start point recorded on the way out and the position reported on the
+ * way back are BOTH off, so the achievable arrival distance is a couple of times the GPS
+ * accuracy. These tests check that arrival is reliable, close to that limit, and never
+ * caused by short-cutting the path.
+ */
+describe('retrace scenarios: arrival at the real start (40 noise seeds each)', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
     });
 
-    const good = ['straight', 'lShape', 'closedLoop', 'hairpin60', 'lasso'] as const;
+    const all = ['straight', 'lShape', 'closedLoop', 'hairpin15', 'hairpin60', 'lasso'] as const;
 
-    it.each(good)('%s with good GPS (8 m) arrives near the real start', name => {
-        const route = SCENARIO_ROUTES[name];
-        const result = simulateRetrace(walkAndRecord(route, 7, 8), route, { accuracy: 8 });
-        expect(result.arrived).toBe(true);
-        expect(result.distanceToStartAtArrivalM).toBeLessThanOrEqual(ARRIVAL_TOLERANCE_M);
-        expect(result.offRouteAlerts).toBe(0);
+    it.each(all)('%s with good GPS (8 m): always arrives, within 25 m, no big jumps', name => {
+        const { arrivedCount, distances, skips } = retraceManySeeds(name, 8);
+        expect(arrivedCount).toBe(40);
+        expect(percentile(distances, 0.9)).toBeLessThanOrEqual(25);
+        expect(skips[skips.length - 1]).toBeLessThan(100);
     });
 
-    it.each(['straight', 'lShape', 'closedLoop', 'lasso'] as const)(
-        '%s with weak GPS (20 m) still arrives near the real start',
-        name => {
-            const route = SCENARIO_ROUTES[name];
-            const result = simulateRetrace(walkAndRecord(route, 7, 20), route, { accuracy: 20 });
-            expect(result.arrived).toBe(true);
-            expect(result.distanceToStartAtArrivalM).toBeLessThanOrEqual(ARRIVAL_TOLERANCE_M);
-        }
-    );
+    it.each(all)('%s with weak GPS (20 m): always arrives, within ~2.5x accuracy', name => {
+        const { arrivedCount, distances, skips } = retraceManySeeds(name, 20);
+        expect(arrivedCount).toBe(40);
+        expect(percentile(distances, 0.9)).toBeLessThanOrEqual(55);
+        // A jump of hundreds of metres would mean the path was short-cut
+        expect(percentile(skips, 0.9)).toBeLessThan(100);
+    });
 
-    // Phase 13: arrival radius grows with reported accuracy and skip-ahead can jump to the
-    // final crumb, so weak GPS declares "arrived" ~62 m from the start.
-    it.fails(
-        '[Phase 13] hairpin60 with weak GPS does not declare arrival far from the start',
-        () => {
-            const route = SCENARIO_ROUTES.hairpin60;
-            const result = simulateRetrace(walkAndRecord(route, 7, 20), route, { accuracy: 20 });
-            expect(result.distanceToStartAtArrivalM).toBeLessThanOrEqual(ARRIVAL_TOLERANCE_M);
+    it.each(['straight', 'lShape', 'closedLoop', 'hairpin60', 'lasso'] as const)(
+        '%s with good GPS raises no false off-route alerts',
+        name => {
+            expect(retraceManySeeds(name, 8).falseAlarms).toBe(0);
         }
     );
 });

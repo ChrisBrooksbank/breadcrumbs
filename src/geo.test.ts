@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
     bearingDegrees,
+    closestPointOnSegment,
     haversineMeters,
     lookAheadPoint,
     pointToSegmentMeters,
+    simplifyPolyline,
     trailDistanceMeters,
 } from '@/geo';
 import type { Breadcrumb } from '@/types';
@@ -228,5 +230,73 @@ describe('lookAheadPoint', () => {
         // Should interpolate ~30m into the first ~111m segment
         expect(result.lat).toBeGreaterThan(0);
         expect(result.lat).toBeLessThan(0.001);
+    });
+});
+
+// Local helper: metres east/north of a fixed origin
+const M_PER_DEG = 111_195;
+function local(x: number, y: number): Breadcrumb {
+    const lat0 = 51.5;
+    return crumb(lat0 + y / M_PER_DEG, x / (M_PER_DEG * Math.cos((lat0 * Math.PI) / 180)));
+}
+
+describe('closestPointOnSegment', () => {
+    it('projects onto the middle of a segment', () => {
+        const result = closestPointOnSegment(local(10, 50), local(0, 0), local(0, 100));
+        expect(result.t).toBeCloseTo(0.5, 2);
+        expect(haversineMeters(result.point, local(0, 50))).toBeLessThan(0.5);
+    });
+
+    it('clamps to the start and end of the segment', () => {
+        expect(closestPointOnSegment(local(5, -30), local(0, 0), local(0, 100)).t).toBe(0);
+        expect(closestPointOnSegment(local(5, 200), local(0, 0), local(0, 100)).t).toBe(1);
+    });
+
+    it('handles a zero-length segment', () => {
+        const result = closestPointOnSegment(local(5, 5), local(0, 0), local(0, 0));
+        expect(result.t).toBe(0);
+        expect(haversineMeters(result.point, local(0, 0))).toBeLessThan(0.01);
+    });
+});
+
+describe('simplifyPolyline', () => {
+    it('returns every index for one or two points', () => {
+        expect(simplifyPolyline([], 5)).toEqual([]);
+        expect(simplifyPolyline([local(0, 0)], 5)).toEqual([0]);
+        expect(simplifyPolyline([local(0, 0), local(0, 10)], 5)).toEqual([0, 1]);
+    });
+
+    it('drops collinear points', () => {
+        const line = [0, 10, 20, 30, 40].map(y => local(0, y));
+        expect(simplifyPolyline(line, 2)).toEqual([0, 4]);
+    });
+
+    it('keeps the corner of an L-shaped path', () => {
+        const path = [local(0, 0), local(0, 20), local(0, 40), local(20, 40), local(40, 40)];
+        expect(simplifyPolyline(path, 3)).toEqual([0, 2, 4]);
+    });
+
+    it('drops wobble smaller than the tolerance but keeps larger deviations', () => {
+        const wobbly = [local(0, 0), local(2, 10), local(-2, 20), local(1, 30), local(0, 40)];
+        expect(simplifyPolyline(wobbly, 5)).toEqual([0, 4]);
+        const detour = [local(0, 0), local(15, 20), local(0, 40)];
+        expect(simplifyPolyline(detour, 5)).toEqual([0, 1, 2]);
+    });
+
+    it('keeps every dropped point within the tolerance of the result', () => {
+        const path = Array.from({ length: 200 }, (_, i) => local(Math.sin(i / 8) * 25, i * 3));
+        const kept = simplifyPolyline(path, 4);
+        for (let k = 0; k < kept.length - 1; k++) {
+            for (let i = kept[k] + 1; i < kept[k + 1]; i++) {
+                expect(
+                    pointToSegmentMeters(path[i], path[kept[k]], path[kept[k + 1]])
+                ).toBeLessThan(4.01);
+            }
+        }
+    });
+
+    it('copes with a very long trail without overflowing the stack', () => {
+        const path = Array.from({ length: 20_000 }, (_, i) => local(i % 2 === 0 ? 0 : 50, i));
+        expect(simplifyPolyline(path, 1).length).toBeGreaterThan(2);
     });
 });

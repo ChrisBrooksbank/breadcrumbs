@@ -5,6 +5,7 @@ import {
     smoothHeading,
     createPositionSmoother,
     orientationToHeading,
+    findTurns,
 } from '@/navigation';
 import type { Breadcrumb } from '@/types';
 
@@ -945,5 +946,258 @@ describe('CompassService – absolute orientation', () => {
 
         expect(compass.compassHeading).toBeNull();
         compass.stop();
+    });
+});
+
+/** Crumbs every `spacing` metres along a straight line, in local east/north metres. */
+function line(x0: number, y0: number, x1: number, y1: number, spacing = 10): Breadcrumb[] {
+    const length = Math.hypot(x1 - x0, y1 - y0);
+    const steps = Math.max(1, Math.round(length / spacing));
+    return Array.from({ length: steps + 1 }, (_, i) =>
+        offsetCrumb(x0 + ((x1 - x0) * i) / steps, y0 + ((y1 - y0) * i) / steps)
+    );
+}
+
+describe('NavigationService – strict, windowed progress', () => {
+    it('does not jump across a hairpin whose legs are only 15 m apart', () => {
+        // Up one side of a path and back down the other, 15 m across
+        const trail = [...line(0, 0, 0, 300), ...line(15, 300, 15, 0)];
+        const service = createNavigationService();
+        service.loadForward(trail);
+
+        // Walk up the first leg to its midpoint: physically 15 m from the return leg
+        for (let y = 0; y <= 150; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+
+        // Should be around crumb 15, not thrown ~30 crumbs ahead onto the return leg
+        expect(service.progress.currentIndex).toBeGreaterThanOrEqual(14);
+        expect(service.progress.currentIndex).toBeLessThanOrEqual(17);
+    });
+
+    it('cannot arrive early by touching the far end of a loop', () => {
+        // A loop that ends 8 m from where it started
+        const trail = [
+            ...line(0, 0, 0, 100),
+            ...line(0, 100, 100, 100).slice(1),
+            ...line(100, 100, 100, 0).slice(1),
+            ...line(100, 0, 8, -2).slice(1),
+        ];
+        const service = createNavigationService();
+        service.loadForward(trail);
+
+        // Standing near the start of the loop, 8 m from its end: not reached yet
+        service.advanceIfClose(offsetCrumb(0, 0));
+        expect(service.progress.arrived).toBe(false);
+        expect(service.progress.currentIndex).toBeLessThanOrEqual(2);
+    });
+
+    it('still advances when the walker passes crumbs 22 m to the side (beyond the 15 m zone)', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 200));
+        const offRouteAlerts = vi.fn();
+        service.onOffRouteChange = offRouteAlerts;
+
+        for (let y = 0; y <= 100; y += 5) service.advanceIfClose(offsetCrumb(22, y));
+
+        // Crumbs are every 10 m, so ~crumb 10 by y = 100
+        expect(service.progress.currentIndex).toBeGreaterThanOrEqual(9);
+        expect(service.progress.currentIndex).toBeLessThanOrEqual(12);
+        expect(offRouteAlerts).not.toHaveBeenCalled();
+    });
+
+    it('does not advance past a segment the walker is nowhere near', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 200));
+        // 60 m east of the path, level with its middle
+        for (let i = 0; i < 6; i++) service.advanceIfClose(offsetCrumb(60, 100));
+        expect(service.progress.currentIndex).toBe(0);
+    });
+
+    it('never moves backwards', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 200));
+        for (let y = 0; y <= 100; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+        const reached = service.progress.currentIndex;
+        for (let y = 100; y >= 0; y -= 5) service.advanceIfClose(offsetCrumb(0, y));
+        expect(service.progress.currentIndex).toBe(reached);
+    });
+
+    it('rejoins at the right place after a detour that skipped part of the route', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 400));
+        const changes: boolean[] = [];
+        service.onOffRouteChange = off => changes.push(off);
+
+        for (let y = 0; y <= 50; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+        // Detour: 100 m east, 150 m north on a parallel track, then back west onto the path
+        for (let x = 0; x <= 100; x += 10) service.advanceIfClose(offsetCrumb(x, 50));
+        for (let y = 50; y <= 200; y += 10) service.advanceIfClose(offsetCrumb(100, y));
+        for (let x = 100; x >= 0; x -= 10) service.advanceIfClose(offsetCrumb(x, 200));
+
+        expect(changes).toEqual([true, false]);
+        // Back at y = 200, so about crumb 20 rather than still chasing crumb ~6
+        expect(service.progress.currentIndex).toBeGreaterThanOrEqual(19);
+        expect(service.progress.currentIndex).toBeLessThanOrEqual(22);
+    });
+
+    it('on rejoining takes the earliest nearby segment, not a later leg of a hairpin', () => {
+        const trail = [...line(0, 0, 0, 300), ...line(15, 300, 15, 0)];
+        const service = createNavigationService();
+        service.loadForward(trail);
+        for (let y = 0; y <= 100; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+        // Wander off to the west, then come back between the two legs at y = 120
+        for (let i = 0; i < 4; i++) service.advanceIfClose(offsetCrumb(-80, 120));
+        expect(service.isOffRoute).toBe(true);
+        service.advanceIfClose(offsetCrumb(7, 120));
+
+        // Nearest to both legs; must resume on the first (around crumb 12), not the return leg
+        expect(service.progress.currentIndex).toBeLessThan(20);
+    });
+
+    it('does not report off-route after arriving', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 30));
+        const alerts = vi.fn();
+        service.onOffRouteChange = alerts;
+        for (let y = 0; y <= 30; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+        expect(service.progress.arrived).toBe(true);
+        for (let i = 0; i < 6; i++) service.advanceIfClose(offsetCrumb(0, 30));
+        expect(alerts).not.toHaveBeenCalled();
+    });
+
+    it('accepts arrival farther out when both the start and the fix were weak', () => {
+        const weakStart = { ...offsetCrumb(0, 0), accuracy: 20 };
+        const service = createNavigationService();
+        service.load([weakStart, offsetCrumb(0, 10)]);
+        service.advanceIfClose(offsetCrumb(0, 10));
+
+        // 26 m from the start crumb: outside 15 m, inside the combined uncertainty
+        service.advanceIfClose({ ...offsetCrumb(0, 26), accuracy: 20 });
+        expect(service.progress.arrived).toBe(true);
+    });
+
+    it('does not extend arrival for precise fixes', () => {
+        const service = createNavigationService();
+        service.load([offsetCrumb(0, 0), offsetCrumb(0, 10)]);
+        service.advanceIfClose(offsetCrumb(0, 10));
+        service.advanceIfClose(offsetCrumb(0, 26)); // accuracy 5 both ways
+        expect(service.progress.arrived).toBe(false);
+    });
+});
+
+describe('NavigationService – remaining distance', () => {
+    it('is the distance to the target plus the rest of the path', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 100));
+        // Standing 3 m before the first crumb
+        const remaining = service.remainingMeters(offsetCrumb(0, -3));
+        expect(remaining).toBeGreaterThan(101);
+        expect(remaining).toBeLessThan(105);
+    });
+
+    it('shrinks as the walker progresses', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 100));
+        for (let y = 0; y <= 40; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+        const remaining = service.remainingMeters(offsetCrumb(0, 40));
+        expect(remaining).toBeGreaterThan(55);
+        expect(remaining).toBeLessThan(65);
+    });
+
+    it('is zero once arrived or with nothing loaded', () => {
+        const service = createNavigationService();
+        expect(service.remainingMeters(offsetCrumb(0, 0))).toBe(0);
+        service.loadForward(line(0, 0, 0, 20));
+        for (let y = 0; y <= 20; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+        expect(service.remainingMeters(offsetCrumb(0, 20))).toBe(0);
+    });
+});
+
+describe('findTurns and NavigationService.nextTurn', () => {
+    const lShape = [...line(0, 0, 0, 100), ...line(0, 100, 100, 100).slice(1)];
+
+    it('finds a right-angle turn and its direction (right when walking north then east)', () => {
+        const turns = findTurns(lShape);
+        expect(turns).toHaveLength(1);
+        expect(turns[0].direction).toBe('right');
+        expect(turns[0].angle).toBeGreaterThan(80);
+        expect(turns[0].angle).toBeLessThan(100);
+        expect(lShape[turns[0].index].lat).toBeCloseTo(offsetCrumb(0, 100).lat, 5);
+    });
+
+    it('reverses left/right when the same path is retraced', () => {
+        const service = createNavigationService();
+        service.load(lShape); // walking back: west then south
+        expect(service.turns).toHaveLength(1);
+        expect(service.turns[0].direction).toBe('left');
+    });
+
+    it('finds no turn on a straight line, even with GPS wobble', () => {
+        const wobble = line(0, 0, 0, 200).map((_, i) =>
+            offsetCrumb(((i % 3) - 1) * 2, i * 10 + ((i * 7) % 3))
+        );
+        expect(findTurns(wobble)).toEqual([]);
+    });
+
+    it('ignores gentle bends but finds a U-turn', () => {
+        const gentle = [...line(0, 0, 0, 100), ...line(0, 100, 30, 190).slice(1)]; // ~18 degrees
+        expect(findTurns(gentle)).toEqual([]);
+
+        const uTurn = [...line(0, 0, 0, 100), ...line(15, 100, 15, 0)];
+        // Across a 15 m gap a U-turn is two consecutive right-angle turns
+        const turns = findTurns(uTurn);
+        expect(turns.map(t => t.direction)).toEqual(['right', 'right']);
+        for (const turn of turns) {
+            expect(turn.angle).toBeGreaterThan(80);
+            expect(turn.angle).toBeLessThan(100);
+        }
+    });
+
+    it('reports the distance along the path to the next corner', () => {
+        const service = createNavigationService();
+        service.loadForward(lShape);
+        const next = service.nextTurn(offsetCrumb(0, 0));
+        expect(next?.direction).toBe('right');
+        expect(next?.meters).toBeGreaterThan(97);
+        expect(next?.meters).toBeLessThan(105);
+    });
+
+    it('moves on to the following corner and then reports none', () => {
+        const service = createNavigationService();
+        service.loadForward(lShape);
+        for (let y = 0; y <= 110; y += 5) service.advanceIfClose(offsetCrumb(0, Math.min(y, 100)));
+        for (let x = 5; x <= 100; x += 5) service.advanceIfClose(offsetCrumb(x, 100));
+        expect(service.nextTurn(offsetCrumb(100, 100))).toBeNull();
+    });
+
+    it('returns null with nothing loaded', () => {
+        expect(createNavigationService().nextTurn(offsetCrumb(0, 0))).toBeNull();
+    });
+});
+
+describe('NavigationService – nearestPathPoint', () => {
+    it('finds the closest point on the path ahead, with its distance', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 200));
+        const nearest = service.nearestPathPoint(offsetCrumb(30, 100));
+        expect(nearest?.distance).toBeGreaterThan(29);
+        expect(nearest?.distance).toBeLessThan(31);
+        expect(nearest?.point.lat).toBeCloseTo(offsetCrumb(0, 100).lat, 5);
+    });
+
+    it('ignores the part of the path already walked', () => {
+        const service = createNavigationService();
+        service.loadForward(line(0, 0, 0, 200));
+        for (let y = 0; y <= 100; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+        // Back beside the start: the nearest remaining path is ahead, not the walked stretch
+        const nearest = service.nearestPathPoint(offsetCrumb(20, 0));
+        expect(nearest?.point.lat).toBeGreaterThan(offsetCrumb(0, 80).lat);
+    });
+
+    it('is null when nothing is loaded or the path is finished', () => {
+        const service = createNavigationService();
+        expect(service.nearestPathPoint(offsetCrumb(0, 0))).toBeNull();
+        service.loadForward(line(0, 0, 0, 20));
+        for (let y = 0; y <= 20; y += 5) service.advanceIfClose(offsetCrumb(0, y));
+        expect(service.nearestPathPoint(offsetCrumb(0, 20))).toBeNull();
     });
 });

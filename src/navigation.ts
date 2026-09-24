@@ -1,10 +1,30 @@
 import type { Breadcrumb } from '@/types';
-import { haversineMeters, pointToSegmentMeters } from '@/geo';
+import {
+    bearingDegrees,
+    closestPointOnSegment,
+    haversineMeters,
+    pointToSegmentMeters,
+    simplifyPolyline,
+} from '@/geo';
 
 const DEFAULT_PROXIMITY_THRESHOLD_METERS = 15;
 const MAX_ACCURACY_ASSIST_METERS = 35;
 const OFF_ROUTE_THRESHOLD_METERS = 30;
 const OFF_ROUTE_DEBOUNCE_FIXES = 3;
+
+/**
+ * Progress only advances through crumbs within this much path ahead of the target (and
+ * always at least MIN_WINDOW_CRUMBS beyond it). This tolerates a missed crumb or two, but
+ * stops a path that doubles back near itself (hairpin, loop, out-and-back) from being
+ * short-cut by mere physical closeness.
+ */
+const SKIP_WINDOW_M = 45;
+const MIN_WINDOW_CRUMBS = 2;
+
+/** Path simplification tolerance used to find turns, ignoring GPS wobble. */
+const TURN_SIMPLIFY_TOLERANCE_M = 6;
+const TURN_MIN_ANGLE_DEG = 35;
+const TURN_MIN_LEG_M = 8;
 
 const EMA_ALPHA = 0.2;
 const COMPASS_UPDATE_INTERVAL_MS = 100; // ~10fps
@@ -78,6 +98,55 @@ export interface NavigationProgress {
     arrived: boolean;
 }
 
+/** A place where the path turns; `index` is the trail crumb at the corner. */
+export interface TurnPoint {
+    index: number;
+    direction: 'left' | 'right';
+    /** Size of the turn in degrees (35-180). */
+    angle: number;
+}
+
+export interface NextTurn extends TurnPoint {
+    /** Distance from the user to the corner, along the path. */
+    meters: number;
+}
+
+export interface NearestPathPoint {
+    point: Breadcrumb;
+    /** Straight-line distance from the user to `point`. */
+    distance: number;
+    /** Trail index of the crumb just ahead of `point`. */
+    index: number;
+}
+
+/** Corners along an ordered trail, found on a simplified copy so GPS wobble is ignored. */
+export function findTurns(trail: Breadcrumb[]): TurnPoint[] {
+    const kept = simplifyPolyline(trail, TURN_SIMPLIFY_TOLERANCE_M);
+    const turns: TurnPoint[] = [];
+    for (let k = 1; k < kept.length - 1; k++) {
+        const before = trail[kept[k - 1]];
+        const corner = trail[kept[k]];
+        const after = trail[kept[k + 1]];
+        if (
+            haversineMeters(before, corner) < TURN_MIN_LEG_M ||
+            haversineMeters(corner, after) < TURN_MIN_LEG_M
+        ) {
+            continue;
+        }
+        let delta = bearingDegrees(corner, after) - bearingDegrees(before, corner);
+        if (delta > 180) delta -= 360;
+        if (delta < -180) delta += 360;
+        if (Math.abs(delta) >= TURN_MIN_ANGLE_DEG) {
+            turns.push({
+                index: kept[k],
+                direction: delta > 0 ? 'right' : 'left',
+                angle: Math.abs(delta),
+            });
+        }
+    }
+    return turns;
+}
+
 export interface NavigationService {
     load(breadcrumbs: Breadcrumb[]): void;
     loadForward(breadcrumbs: Breadcrumb[]): void;
@@ -88,6 +157,16 @@ export interface NavigationService {
         threshold?: number
     ): number;
     distanceToTrailMeters(pos: Breadcrumb): number;
+    /** The ordered trail being followed (reversed for retrace). */
+    readonly trail: readonly Breadcrumb[];
+    /** Corners along the trail, in walking order. */
+    readonly turns: readonly TurnPoint[];
+    /** Path distance still to walk from `pos` to the end of the trail (0 once arrived). */
+    remainingMeters(pos: Breadcrumb): number;
+    /** The next corner ahead, with its distance along the path; null if none remain. */
+    nextTurn(pos: Breadcrumb): NextTurn | null;
+    /** Closest point on the part of the path still to walk, or null if none remains. */
+    nearestPathPoint(pos: Breadcrumb): NearestPathPoint | null;
     readonly progress: NavigationProgress;
     readonly targetBreadcrumb: Breadcrumb | null;
     readonly isOffRoute: boolean;
@@ -251,6 +330,9 @@ export function createPositionSmoother(bufferSize = 3): PositionSmoother {
 
 export function createNavigationService(): NavigationService {
     let trail: Breadcrumb[] = [];
+    /** cumulative[i] = path metres from trail[0] to trail[i]. */
+    let cumulative: number[] = [];
+    let turns: TurnPoint[] = [];
     let currentIndex = 0;
 
     // Off-route detection state
@@ -258,47 +340,36 @@ export function createNavigationService(): NavigationService {
     let offRouteConsecutiveFixes = 0;
     let onOffRouteChange: ((offRoute: boolean) => void) | null = null;
 
-    function load(breadcrumbs: Breadcrumb[]): void {
-        trail = [...breadcrumbs].reverse();
+    function prepare(ordered: Breadcrumb[]): void {
+        trail = ordered;
         currentIndex = 0;
         offRoute = false;
         offRouteConsecutiveFixes = 0;
+        cumulative = [];
+        for (let i = 0; i < trail.length; i++) {
+            cumulative.push(
+                i === 0 ? 0 : cumulative[i - 1] + haversineMeters(trail[i - 1], trail[i])
+            );
+        }
+        turns = findTurns(trail);
+    }
+
+    function load(breadcrumbs: Breadcrumb[]): void {
+        prepare([...breadcrumbs].reverse());
     }
 
     function loadForward(breadcrumbs: Breadcrumb[]): void {
-        trail = [...breadcrumbs];
-        currentIndex = 0;
-        offRoute = false;
-        offRouteConsecutiveFixes = 0;
+        prepare([...breadcrumbs]);
     }
 
-    function checkAndAdvance(
-        pos: Breadcrumb,
-        threshold = DEFAULT_PROXIMITY_THRESHOLD_METERS
-    ): boolean {
-        if (trail.length === 0 || currentIndex >= trail.length) return false;
-
-        const target = trail[currentIndex];
-        const effectiveThreshold = proximityThresholdMeters(pos, target, threshold);
-        const distance = haversineMeters(pos, target);
-
-        if (distance <= effectiveThreshold) {
-            currentIndex++;
-            return true;
+    /** Last trail index that may be reached from the current target in one step. */
+    function windowEnd(): number {
+        const last = trail.length - 1;
+        let end = Math.min(currentIndex + MIN_WINDOW_CRUMBS, last);
+        while (end < last && cumulative[end + 1] - cumulative[currentIndex] <= SKIP_WINDOW_M) {
+            end++;
         }
-
-        // GPS can easily make a user miss a single breadcrumb. If they are close to
-        // a future point, advance past the missed point instead of making them chase it.
-        for (let i = currentIndex + 1; i < trail.length; i++) {
-            const futureTarget = trail[i];
-            const futureThreshold = proximityThresholdMeters(pos, futureTarget, threshold);
-            if (haversineMeters(pos, futureTarget) <= futureThreshold) {
-                currentIndex = i + 1;
-                return true;
-            }
-        }
-
-        return false;
+        return end;
     }
 
     function proximityThresholdMeters(
@@ -314,6 +385,95 @@ export function createNavigationService(): NavigationService {
             Math.min(posAccuracy, MAX_ACCURACY_ASSIST_METERS),
             targetAccuracy
         );
+    }
+
+    /** Combined 1-sigma-ish uncertainty of two fixes (root sum of squares of accuracies). */
+    function combinedAccuracy(a: Breadcrumb, b: Breadcrumb): number {
+        const accA = Number.isFinite(a.accuracy) ? a.accuracy : 0;
+        const accB = Number.isFinite(b.accuracy) ? b.accuracy : 0;
+        return Math.hypot(accA, accB);
+    }
+
+    /**
+     * The user has gone past `from` on the way to `to` if they are alongside that segment
+     * (anywhere in the on-route band, so wider than the arrival zone) and beyond its start.
+     * Catches walkers who pass a crumb 15-30 m to the side, who would otherwise never get
+     * close enough to "reach" it. Only ever looks at the next segment in sequence, so it
+     * cannot jump to a later part of a path that doubles back.
+     */
+    function hasPassed(
+        pos: Breadcrumb,
+        from: Breadcrumb,
+        to: Breadcrumb,
+        threshold: number
+    ): boolean {
+        const band = Math.max(
+            OFF_ROUTE_THRESHOLD_METERS,
+            proximityThresholdMeters(pos, null, threshold)
+        );
+        if (pointToSegmentMeters(pos, from, to) > band) return false;
+        return closestPointOnSegment(pos, from, to).t > 0;
+    }
+
+    /** Nearest point on the segments still to be walked (including the one just passed). */
+    function nearestRemaining(pos: Breadcrumb): { segment: number; distance: number } | null {
+        let best: { segment: number; distance: number } | null = null;
+        for (let j = Math.max(currentIndex - 1, 0); j < trail.length - 1; j++) {
+            const distance = pointToSegmentMeters(pos, trail[j], trail[j + 1]);
+            if (best === null || distance < best.distance) best = { segment: j, distance };
+        }
+        return best;
+    }
+
+    /**
+     * The moment the user comes back on route after a detour, snap progress to the part of
+     * the route they have rejoined. Takes the EARLIEST remaining segment within reach rather
+     * than the nearest, so where the path doubles back close to itself the user is never
+     * jumped to a later leg. Only ever runs at that moment, never as a standing shortcut.
+     */
+    function rejoin(pos: Breadcrumb): void {
+        for (let j = Math.max(currentIndex - 1, 0); j < trail.length - 1; j++) {
+            if (pointToSegmentMeters(pos, trail[j], trail[j + 1]) <= OFF_ROUTE_THRESHOLD_METERS) {
+                currentIndex = Math.max(currentIndex, j + 1);
+                return;
+            }
+        }
+    }
+
+    function checkAndAdvance(
+        pos: Breadcrumb,
+        threshold = DEFAULT_PROXIMITY_THRESHOLD_METERS
+    ): boolean {
+        if (trail.length === 0 || currentIndex >= trail.length) return false;
+        const before = currentIndex;
+
+        // Reached the target, or (if it was missed) the nearest crumb ahead within the
+        // window, so one noisy crumb does not strand the user.
+        const end = windowEnd();
+        for (let i = currentIndex; i <= end; i++) {
+            let radius = proximityThresholdMeters(pos, trail[i], threshold);
+            if (i === trail.length - 1) {
+                // The start point was itself recorded with some error: allow for both.
+                radius = Math.max(
+                    radius,
+                    Math.min(combinedAccuracy(pos, trail[i]), MAX_ACCURACY_ASSIST_METERS)
+                );
+            }
+            if (haversineMeters(pos, trail[i]) <= radius) {
+                currentIndex = i + 1;
+                break;
+            }
+        }
+
+        // Walked past the target sideways
+        while (
+            currentIndex < trail.length - 1 &&
+            hasPassed(pos, trail[currentIndex], trail[currentIndex + 1], threshold)
+        ) {
+            currentIndex++;
+        }
+
+        return currentIndex > before;
     }
 
     /**
@@ -332,7 +492,7 @@ export function createNavigationService(): NavigationService {
     }
 
     /**
-     * Update off-route state based on distance to trail.
+     * Update off-route state based on distance to the part of the trail still to be walked.
      * Fires onOffRouteChange callback when the state toggles.
      */
     function updateOffRouteState(distToTrail: number): void {
@@ -353,18 +513,63 @@ export function createNavigationService(): NavigationService {
         }
     }
 
+    function remainingMeters(pos: Breadcrumb): number {
+        if (trail.length === 0 || currentIndex >= trail.length) return 0;
+        return (
+            haversineMeters(pos, trail[currentIndex]) +
+            (cumulative[trail.length - 1] - cumulative[currentIndex])
+        );
+    }
+
+    function nextTurn(pos: Breadcrumb): NextTurn | null {
+        if (trail.length === 0 || currentIndex >= trail.length) return null;
+        const turn = turns.find(t => t.index >= currentIndex);
+        if (!turn) return null;
+        return {
+            ...turn,
+            meters:
+                haversineMeters(pos, trail[currentIndex]) +
+                (cumulative[turn.index] - cumulative[currentIndex]),
+        };
+    }
+
+    function nearestPathPoint(pos: Breadcrumb): NearestPathPoint | null {
+        const nearest = nearestRemaining(pos);
+        if (!nearest) return null;
+        const { point } = closestPointOnSegment(
+            pos,
+            trail[nearest.segment],
+            trail[nearest.segment + 1]
+        );
+        return { point, distance: nearest.distance, index: nearest.segment + 1 };
+    }
+
     return {
         load,
         loadForward,
         advanceIfClose(pos: Breadcrumb, threshold = DEFAULT_PROXIMITY_THRESHOLD_METERS): boolean {
-            const advanced = checkAndAdvance(pos, threshold);
-            if (trail.length >= 2) {
-                updateOffRouteState(distanceToTrailMeters(pos));
+            const before = currentIndex;
+            checkAndAdvance(pos, threshold);
+            if (trail.length >= 2 && currentIndex < trail.length) {
+                const nearest = nearestRemaining(pos);
+                if (nearest) {
+                    if (offRoute && nearest.distance <= OFF_ROUTE_THRESHOLD_METERS) rejoin(pos);
+                    updateOffRouteState(nearest.distance);
+                }
             }
-            return advanced;
+            return currentIndex > before;
         },
         proximityThresholdMeters,
         distanceToTrailMeters,
+        remainingMeters,
+        nextTurn,
+        nearestPathPoint,
+        get trail(): readonly Breadcrumb[] {
+            return trail;
+        },
+        get turns(): readonly TurnPoint[] {
+            return turns;
+        },
         get progress(): NavigationProgress {
             return {
                 currentIndex,
