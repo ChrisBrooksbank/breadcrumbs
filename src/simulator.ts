@@ -1,4 +1,7 @@
 import type { Breadcrumb } from '@/types';
+import { bearingDegrees, haversineMeters } from '@/geo';
+import { buildScenario, isScenarioName, SCENARIO_ROUTES } from '@/scenarios';
+import { parseGpx } from '@/gpx';
 
 type WatchEntry = {
     id: number;
@@ -10,8 +13,20 @@ type SimulatorController = {
     startWalk(): void;
     startReturn(): void;
     sendWeakFix(): void;
+    /** Replay a named ground-truth scenario (see SCENARIO_ROUTES). `speedup` > 1 plays faster. */
+    startScenario(name: string, speedup?: number): void;
+    /** Replay the track points of a GPX document. */
+    playGpx(xml: string, speedup?: number): void;
     stop(): void;
 };
+
+/** Below this speed (m/s) a computed heading is meaningless, so report null like real GPS. */
+const MIN_HEADING_SPEED_MS = 0.5;
+
+interface FixMotion {
+    speed: number | null;
+    heading: number | null;
+}
 
 declare global {
     interface Window {
@@ -40,7 +55,7 @@ export function installBreadcrumbSimulator(): void {
     let nextWatchId = 1;
     let timers: ReturnType<typeof setTimeout>[] = [];
 
-    function emit(fix: Breadcrumb): void {
+    function emit(fix: Breadcrumb, motion?: FixMotion): void {
         const position = {
             coords: {
                 latitude: fix.lat,
@@ -48,8 +63,8 @@ export function installBreadcrumbSimulator(): void {
                 accuracy: fix.accuracy,
                 altitude: null,
                 altitudeAccuracy: null,
-                heading: null,
-                speed: null,
+                heading: motion?.heading ?? null,
+                speed: motion?.speed ?? null,
             },
             timestamp: fix.timestamp || Date.now(),
         } as GeolocationPosition;
@@ -59,15 +74,32 @@ export function installBreadcrumbSimulator(): void {
         }
     }
 
-    function playRoute(route: Breadcrumb[]): void {
+    /** Speed/heading between consecutive route fixes, from the route's own timestamps. */
+    function motionBetween(previous: Breadcrumb | undefined, fix: Breadcrumb): FixMotion {
+        if (!previous) return { speed: null, heading: null };
+        const dtSeconds = (fix.timestamp - previous.timestamp) / 1000;
+        if (dtSeconds <= 0) return { speed: null, heading: null };
+        const speed = haversineMeters(previous, fix) / dtSeconds;
+        return {
+            speed,
+            heading: speed >= MIN_HEADING_SPEED_MS ? bearingDegrees(previous, fix) : null,
+        };
+    }
+
+    function playRoute(route: Breadcrumb[], intervalMs = 700): void {
         stop();
         route.forEach((fix, index) => {
+            const motion = motionBetween(route[index - 1], fix);
             timers.push(
                 setTimeout(() => {
-                    emit({ ...fix, timestamp: Date.now() });
-                }, index * 700)
+                    emit({ ...fix, timestamp: Date.now() }, motion);
+                }, index * intervalMs)
             );
         });
+    }
+
+    function intervalForSpeedup(speedup: number): number {
+        return 1000 / Math.max(speedup, 0.1);
     }
 
     function stop(): void {
@@ -81,6 +113,17 @@ export function installBreadcrumbSimulator(): void {
         },
         startReturn() {
             playRoute([...BASE_ROUTE].reverse());
+        },
+        startScenario(name, speedup = 1) {
+            if (!isScenarioName(name)) {
+                throw new Error(
+                    `Unknown scenario "${name}". Available: ${Object.keys(SCENARIO_ROUTES).join(', ')}`
+                );
+            }
+            playRoute(buildScenario(name), intervalForSpeedup(speedup));
+        },
+        playGpx(xml, speedup = 1) {
+            playRoute(parseGpx(xml), intervalForSpeedup(speedup));
         },
         sendWeakFix() {
             const last = BASE_ROUTE[BASE_ROUTE.length - 1];

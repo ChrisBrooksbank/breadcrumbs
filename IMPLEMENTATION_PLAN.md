@@ -4,7 +4,7 @@
 
 - Planning iterations: 24
 - Build iterations: 0
-- Last updated: 2026-02-17
+- Last updated: 2026-09-24 (added Phases 10-16: real-world reliability plan, PWA-only)
 
 ## Tasks
 
@@ -99,9 +99,107 @@
 - [x] Add battery-saving UI indicator on recording screen: show "Low power" badge when in stationary/low-power mode (spec: adaptive-gps.md)
 - [x] Write unit tests for: adaptive threshold calculation based on bearing change, stationary detection trigger, low-power mode transitions (spec: adaptive-gps.md)
 
+### Phase 10: Test Harness (real-world scenarios first) - DONE except real-walk fixture
+
+Goal: make real-world failures reproducible before fixing them. Do this phase first.
+
+- [x] Add GPX/JSON track replay to `src/simulator.ts` (`startScenario(name, speedup)`, `playGpx(xml, speedup)` on `window.__breadcrumbsSimulator`, emitting `speed`/`heading`); GPX parsing in `src/gpx.ts`
+- [x] Add noise injectors in `src/scenarios.ts`: correlated (AR(1)) GPS jitter, standing-still drift, single-fix outliers, dropped-fix gaps (poor-accuracy bursts = jitter with a large `accuracy`)
+- [x] Add scenario routes + tests: straight, L-shape, closed loop, hairpin (15 m and 60 m legs), lasso (`src/retrace-scenarios.test.ts`: real GeolocationService record -> real NavigationService retrace)
+- [ ] Record one real walk (GPX) as a fixture and commit it (needs a real device walk; replay it with `__breadcrumbsSimulator.playGpx(xml)` or add a fixture-based test)
+- [x] Add failing-bug tests using `it.fails` (they pass while the bug exists and fail once it is fixed; then flip to `it`)
+
+#### Phase 10 findings (measured, seeded, deterministic)
+
+Confirmed bugs (each has an `it.fails` test tagged with the phase that should fix it):
+
+- Standing still for 2 min adds ~83 crumbs (drift cloud) -> Phase 11
+- A 400 m walk at 20 m accuracy records a trail ~3.3x too long (1.2x at 8 m accuracy) -> Phase 11
+- A single 60 m GPS spike (with good reported accuracy) is recorded as a crumb -> Phase 11
+- A 2-minute GPS dropout leaves a ~180 m jump between crumbs with no gap marker -> Phase 11
+- A 2-day-old session is silently continued ("Continuing your previous route") -> Phase 11
+- With weak GPS (20 m) "arrived" fires ~62 m from the real start on the 60 m hairpin (arrival radius grows with accuracy, skip-ahead can jump to the last crumb) -> Phase 13
+
+Corrections to the original analysis:
+
+- Loops and out-and-back routes do NOT end early in practice: at 8 m accuracy every scenario arrives within ~20 m of the real start. Skip-ahead does shortcut whole legs when the path passes within the proximity radius (e.g. 15 m hairpin skips ~700 m). That is a shortcut only if the ground between is walkable, so it is a product decision for Phase 13 rather than a definite bug. Phase 13 should still add forward-only windowed progress and a stricter arrival test.
+
+### Phase 11: Trustworthy Recording
+
+Goal: never lose or corrupt the trail. PWA-only: assume the app stays open in the foreground with the screen on.
+
+- [ ] Acquire the Wake Lock while recording (currently navigation only); re-acquire on `visibilitychange`; show a clear "keep app open" hint if the lock is unavailable
+- [ ] Add a dim/black "battery saver" overlay (OLED-friendly) that keeps the screen on but near-black; tap-and-hold to wake
+- [ ] Add a GPS watchdog in `gps.ts`: if no fix for N seconds, restart `watchPosition`; also restart on `visibilitychange` to visible; surface "Lost GPS" state to the UI
+- [ ] Flag gaps: when the time/distance since the last crumb is large, mark the crumb `gap: true` (extend `Breadcrumb`); retrace treats gap segments as straight-line and warns
+- [ ] Rewrite `storage.ts` session storage: one IndexedDB record per crumb (keyed by sequence), serialized append queue, single cached DB connection; migrate the DB version and keep old sessions readable
+- [ ] Filtering in `gps.ts`: scale the distance threshold with fix accuracy; reject implausible speed jumps (>~12 m/s walking); drop standing-still drift crumbs
+- [ ] Call `navigator.storage.persist()` on first save; show a warning if it is denied
+- [ ] Explicit session lifecycle: "Start walk" / "Set start here"; on open, if the previous session is stale (>~2h old or far from current position) ask "Continue or start new?" instead of silently appending
+- [ ] Fix the location-request timeout so it does not fire while the permission prompt is still open (`startRecording`)
+- [ ] Reconsider low-power mode: `maximumAge` does not reduce GPS power; remove or replace with a lower-rate strategy, and request iOS `DeviceMotionEvent.requestPermission` from a user gesture if motion is kept
+- [ ] Tests for watchdog restart, gap flagging, storage append ordering, stale-session prompt
+
+### Phase 12: Trustworthy Heading
+
+Goal: an arrow the user can believe.
+
+- [ ] Android: listen to `deviceorientationabsolute` (fall back to `deviceorientation` only when unavailable); compute heading with tilt compensation from alpha/beta/gamma plus screen orientation, not `360 - alpha`
+- [ ] Use GPS course-over-ground (`coords.heading` when present, else computed bearing) as the primary heading when speed > ~1 m/s; use the compass only when slow or stopped
+- [ ] Learn the compass-vs-GPS offset while moving (circular mean over a window) and apply it to the compass when stopped; replace the confidence-only blend in `heading-fusion.ts`
+- [ ] Show "compass unreliable" only when the offset is unstable; keep the calibration hint for iOS
+- [ ] Optional: apply magnetic declination so compass and GPS bearings share a reference (small offline lookup or a coarse model)
+- [ ] Tests: offset learning, moving/stopped switching, 0/360 wrap, tilt compensation
+
+### Phase 13: Retrace Engine
+
+Goal: get back correctly, including loops and out-and-back routes.
+
+- [ ] Add `simplifyTrail()` (Douglas-Peucker, tolerance ~ accuracy-aware, min 3-5 m) to `geo.ts`; navigate the simplified path, keep raw for display/saving
+- [ ] Replace crumb-by-crumb advance in `navigation.ts` with monotonic progress along the path: project position onto the path within a forward window; never jump beyond the window; never go backwards; remove the unbounded skip-ahead loop and the `trail[0]` pre-advance in `main.ts`
+- [ ] Track `distanceRemaining` along the path (always shown, not only in Simple mode) and an ETA at current walking speed
+- [ ] Derive turn points from the simplified path (bearing change > ~35deg) with distance to the next turn
+- [ ] Off-route recovery: when off the trail, point at the nearest path point (with distance), then resume path following; announce "back on route"
+- [ ] Keep recording while returning (append the detour); "Take me back" again from a new position works
+- [ ] Wait for the first real fix before showing distance/direction (no faked `currentPos`); warn if the current position is far from the trail end
+- [ ] Explicit arrived state: confirm within accuracy-aware radius, offer "Done" / "Save route"
+- [ ] Tests using the Phase 10 scenarios: loop, out-and-back, self-crossing, noisy trail, gap
+
+### Phase 14: Garmin-style Single Screen
+
+Goal: glanceable "walk, track back".
+
+- [ ] Redesign the trail view: user fixed near bottom-centre, heading-up, rotate about the user (not canvas centre), fixed zoom showing the next ~100-200 m with +/- zoom buttons and auto-zoom only as a fallback
+- [ ] Big "distance to start" as the primary number; next-turn arrow with distance as secondary; small compass as tertiary
+- [ ] One primary "Take me back" / "I'm back" flow; fold Simple and Full into one adaptive layout (keep font scaling and high-contrast themes)
+- [ ] Larger canvas text (min 16px), accessible colours (contrast >= 4.5:1), off-route state not colour-only
+- [ ] Visual regression screenshots (Playwright) for home, recording, returning, off-route, arrived
+
+### Phase 15: Turn-by-turn Feedback
+
+- [ ] Speech with distance: "Turn left in 30 metres", "Continue 200 metres", "Off route, head back toward the trail"; keep the throttle but never drop arrival/off-route messages
+- [ ] Distinct haptic patterns for left, right, off-route, arrived (Android); audio tone equivalents for iOS and silent mode
+- [ ] Alert when GPS accuracy degrades or the app is backgrounded during navigation ("Keep the app open")
+- [ ] Tests for cue selection and throttling
+
+### Phase 16: Structure and Maintainability
+
+- [ ] Extract an app state machine (idle -> recording -> returning -> arrived) from `main.ts`; views become pure render functions of state
+- [ ] Split `main.ts` (2,100 lines) into `views/`, `session.ts`, `nav-session.ts`; keep `@/` aliases
+- [ ] Keep Knip and coverage clean after each extraction; no behaviour changes in this phase
+
+### Deferred (decision: stay PWA for now)
+
+- Native shell (Capacitor + background location foreground service) for screen-off recording. Revisit only if field tests show the foreground-only PWA is not good enough.
+- Watch apps (Wear OS / Garmin Connect IQ).
+
 ## Completed
 
 <!-- Completed tasks move here -->
+
+## Priority Order for Phases 10-16
+
+Phase 10 first (reproduce bugs), then 11 -> 12 -> 13 (these fix trust in the core loop), then 14 -> 15 (UX), then 16 (refactor; may be interleaved earlier if `main.ts` blocks progress).
 
 ## Notes
 
