@@ -11,18 +11,13 @@ import {
     clearSession,
     updateLastBreadcrumb,
 } from '@/storage';
-import {
-    haversineMeters,
-    bearingDegrees,
-    remainingTrailDistance,
-    lookAheadPoint,
-    trailDistanceMeters,
-} from '@/geo';
+import { haversineMeters, bearingDegrees, lookAheadPoint, trailDistanceMeters } from '@/geo';
 import {
     createNavigationService,
     createCompassService,
     createPositionSmoother,
 } from '@/navigation';
+import type { NextTurn } from '@/navigation';
 import { createWakeLockManager } from '@/wake-lock';
 import { createAudioKeepAlive } from '@/audio-keepalive';
 import { createShakeDetector } from '@/motion';
@@ -481,11 +476,12 @@ function renderFullNavigationView(): string {
                         <div class="nav-trail-overlay">
                             <div class="nav-distance-display">
                                 <span class="nav-distance-value" id="nav-distance-value">--</span>
-                                <span class="nav-distance-label">to next point</span>
+                                <span class="nav-distance-label" id="nav-distance-label">to start</span>
                             </div>
                             <div class="nav-progress" id="nav-progress" aria-live="polite">
                                 <span id="nav-progress-text">Loading&hellip;</span>
                             </div>
+                            <div class="nav-next-turn" id="nav-next-turn" aria-live="polite" hidden></div>
                             <div class="nav-recovery-hint" id="nav-recovery-hint" aria-live="polite" hidden></div>
                         </div>
                         <div class="nav-compass-corner" aria-label="Compass direction indicator">
@@ -515,6 +511,14 @@ function renderFullNavigationView(): string {
                     Silent: Off
                 </button>
             </div>
+            <div class="nav-arrival-actions" id="nav-arrival-actions" role="group" aria-label="You have arrived" hidden>
+                <button class="btn btn--primary btn--large" id="btn-arrival-done" aria-label="Done, finish this walk">
+                    Done
+                </button>
+                <button class="btn btn--secondary" id="btn-arrival-save" aria-label="Save this route for later">
+                    Save this route
+                </button>
+            </div>
             <button class="btn btn--secondary" id="btn-stop-navigation" aria-label="Stop navigation and return to recording screen">
                 Stop navigation
             </button>
@@ -533,6 +537,7 @@ function renderSimpleNavigationView(): string {
             <div class="simple-nav__progress" id="nav-progress" aria-live="polite">
                 <span id="nav-progress-text">Loading&hellip;</span>
             </div>
+            <div class="nav-next-turn" id="nav-next-turn" aria-live="polite" hidden></div>
             <div class="nav-recovery-hint" id="nav-recovery-hint" aria-live="polite" hidden></div>
         </main>
         <footer class="nav-footer">
@@ -545,6 +550,14 @@ function renderSimpleNavigationView(): string {
                 </button>
                 <button class="btn btn--secondary" id="btn-silent-mode" aria-label="Toggle silent mode" aria-pressed="false">
                     Silent: Off
+                </button>
+            </div>
+            <div class="nav-arrival-actions" id="nav-arrival-actions" role="group" aria-label="You have arrived" hidden>
+                <button class="btn btn--primary btn--large" id="btn-arrival-done" aria-label="Done, finish this walk">
+                    Done
+                </button>
+                <button class="btn btn--secondary" id="btn-arrival-save" aria-label="Save this route for later">
+                    Save this route
                 </button>
             </div>
             <button class="btn btn--secondary" id="btn-stop-navigation" aria-label="Stop navigation and return to recording screen">
@@ -576,6 +589,22 @@ function updateNavProgress(root: HTMLElement, currentIndex: number, total: numbe
         const current = Math.min(currentIndex + 1, total);
         el.textContent = `Breadcrumb ${current} of ${total}`;
     }
+}
+
+/** A corner closer than this is announced as imminent. */
+const TURN_SOON_METERS = 40;
+
+function updateNavNextTurn(root: HTMLElement, turn: NextTurn | null): void {
+    const el = root.querySelector<HTMLElement>('#nav-next-turn');
+    if (!el) return;
+    if (turn === null) {
+        el.hidden = true;
+        el.textContent = '';
+        return;
+    }
+    el.hidden = false;
+    el.textContent = `Turn ${turn.direction} in ${formatDistance(turn.meters)}`;
+    el.classList.toggle('nav-next-turn--soon', turn.meters <= TURN_SOON_METERS);
 }
 
 function updateNavRecoveryHint(root: HTMLElement, message: string | null): void {
@@ -874,6 +903,50 @@ export function switchToNavigationView(
         return fusion.fusedHeading ?? compassFallback ?? navGps.movementBearing;
     }
 
+    /** Arrived: celebrate, stop tracking, and offer Save / Done instead of "stop navigation". */
+    function handleArrival(): void {
+        showNavArrived(root);
+        feedback.cancelPending();
+        feedback.playArrivalFeedback();
+        navGps.stop();
+        compass.stop();
+        if (pocketMode) exitPocketMode();
+
+        const actions = root.querySelector<HTMLElement>('#nav-arrival-actions');
+        const stopButton = root.querySelector<HTMLElement>('#btn-stop-navigation');
+        if (stopButton) stopButton.hidden = true;
+        if (!actions) return;
+        actions.hidden = false;
+
+        const saveButton = root.querySelector<HTMLButtonElement>('#btn-arrival-save');
+        const doneButton = root.querySelector<HTMLButtonElement>('#btn-arrival-done');
+        // A followed saved route is already saved and is not the recording session
+        if (followMode && saveButton) saveButton.hidden = true;
+
+        doneButton?.addEventListener('click', () => {
+            if (followMode) {
+                leaveNavigation();
+                return;
+            }
+            // The walk is over: start fresh next time rather than resuming this trail
+            clearSession()
+                .catch(() => {})
+                .finally(leaveNavigation);
+        });
+
+        saveButton?.addEventListener('click', () => {
+            getSession()
+                .then(session => {
+                    const crumbs = session?.breadcrumbs ?? [];
+                    // Saving clears the session, so just return to the recording screen after
+                    openSaveModal(crumbs, trailDistanceMeters(crumbs), leaveNavigation);
+                })
+                .catch(() => {});
+        });
+
+        doneButton?.focus();
+    }
+
     function renderTrail(): void {
         if (!trailRenderer || trailBreadcrumbs.length === 0) return;
         trailRenderer.render({
@@ -885,14 +958,26 @@ export function switchToNavigationView(
         });
     }
 
+    /**
+     * Where to point the user. On the route: a look-ahead point along it, for a stable
+     * bearing. Off the route: the nearest point of the route still to walk, so the arrow
+     * always shows the quickest way back onto it.
+     */
+    function guidanceTarget(from: Breadcrumb): Breadcrumb | null {
+        if (nav.isOffRoute) {
+            const nearest = nav.nearestPathPoint(from);
+            if (nearest) return nearest.point;
+        }
+        if (trailBreadcrumbs.length > 0) {
+            return lookAheadPoint(trailBreadcrumbs, nav.progress.currentIndex, 30);
+        }
+        return nav.targetBreadcrumb;
+    }
+
     function refreshArrow(): void {
-        // Use look-ahead point for stable bearing (same pattern as simple mode)
         const posForBearing = smoother.smoothed ?? currentPos;
         if (posForBearing) {
-            let bearingTarget = nav.targetBreadcrumb;
-            if (trailBreadcrumbs.length > 0) {
-                bearingTarget = lookAheadPoint(trailBreadcrumbs, nav.progress.currentIndex, 30);
-            }
+            const bearingTarget = guidanceTarget(posForBearing);
             if (bearingTarget) {
                 bearingToBreadcrumb = bearingDegrees(posForBearing, bearingTarget);
             }
@@ -952,18 +1037,12 @@ export function switchToNavigationView(
                 const now = Date.now();
                 if (now - lastSimpleUpdateTime >= SIMPLE_THROTTLE_MS) {
                     lastSimpleUpdateTime = now;
-                    // Use look-ahead bearing for simple mode direction
+                    // Use the same guidance target as the arrow
                     let simpleTarget = bearingToBreadcrumb;
-                    if (trailBreadcrumbs.length > 0) {
-                        const posForBearing = smoother.smoothed ?? currentPos;
-                        if (posForBearing) {
-                            const laPoint = lookAheadPoint(
-                                trailBreadcrumbs,
-                                nav.progress.currentIndex,
-                                30
-                            );
-                            simpleTarget = bearingDegrees(posForBearing, laPoint);
-                        }
+                    const posForBearing = smoother.smoothed ?? currentPos;
+                    if (posForBearing) {
+                        const target = guidanceTarget(posForBearing);
+                        if (target) simpleTarget = bearingDegrees(posForBearing, target);
                     }
                     const simpleDelta = simpleTarget - fusedHeading;
                     const dir = classifyDirectionWithHysteresis(simpleDelta, previousDirection);
@@ -994,11 +1073,8 @@ export function switchToNavigationView(
                 nav.load(breadcrumbs);
             }
 
-            // Store trail for rendering (nav.load() reverses, nav.loadForward() doesn't)
-            // We always render the trail in the order that NavigationService uses it.
-            // Access the ordered trail via nav.progress and nav.targetBreadcrumb won't give us
-            // the full list, so we reconstruct from breadcrumbs + navigation mode.
-            trailBreadcrumbs = followMode ? breadcrumbs : [...breadcrumbs].reverse();
+            // Render the trail in exactly the order the navigation service follows it
+            trailBreadcrumbs = [...nav.trail];
 
             // Initialise trail renderer
             const canvas = root.querySelector<HTMLCanvasElement>('#nav-trail-canvas');
@@ -1011,44 +1087,30 @@ export function switchToNavigationView(
 
             const distanceEl = root.querySelector('#nav-distance-value');
             if (distanceEl) distanceEl.textContent = '-- m';
+            const distanceLabel = root.querySelector('#nav-distance-label');
+            if (distanceLabel && followMode) distanceLabel.textContent = 'to finish';
 
-            if (!followMode && trailBreadcrumbs.length > 0) {
-                currentPos = trailBreadcrumbs[0];
-                smoother.push(currentPos);
-                nav.advanceIfClose(currentPos);
-                const initialProgress = nav.progress;
-                if (initialProgress.arrived) {
-                    showNavArrived(root);
-                } else {
-                    updateNavProgress(root, initialProgress.currentIndex, initialProgress.total);
-                    const initialTarget = nav.targetBreadcrumb;
-                    if (initialTarget) {
-                        updateNavDistance(
-                            root,
-                            getSimpleMode()
-                                ? remainingTrailDistance(
-                                      currentPos,
-                                      trailBreadcrumbs,
-                                      initialProgress.currentIndex
-                                  )
-                                : haversineMeters(currentPos, initialTarget)
-                        );
-                    }
-                }
+            // No position is assumed: guidance starts with the first real GPS fix
+            if (!compassPermissionButton || compassPermissionButton.hidden) {
+                updateNavRecoveryHint(root, 'Finding your position\u2026');
             }
 
             compass.start();
 
             // Landmark announcement state
+            let firstFix = true;
             let landmarkAnnouncedFar = false;
             let landmarkAnnouncedNear = false;
 
             nav.onOffRouteChange = (offRoute: boolean) => {
                 if (offRoute) {
                     feedback.playOffRouteFeedback();
+                    const nearest = currentPos ? nav.nearestPathPoint(currentPos) : null;
                     updateNavRecoveryHint(
                         root,
-                        'Off trail. Turn until the direction says STRAIGHT, then walk back toward the route.'
+                        nearest
+                            ? `Off trail \u2014 the route is ${formatDistance(nearest.distance)} away. Follow the direction back toward it.`
+                            : 'Off trail. Turn until the direction says STRAIGHT, then walk back toward the route.'
                     );
                 } else {
                     feedback.playBackOnTrackFeedback();
@@ -1068,12 +1130,7 @@ export function switchToNavigationView(
                     }
 
                     if (nav.progress.arrived) {
-                        showNavArrived(root);
-                        feedback.cancelPending();
-                        feedback.playArrivalFeedback();
-                        navGps.stop();
-                        compass.stop();
-                        if (pocketMode) exitPocketMode();
+                        handleArrival();
                         return;
                     }
 
@@ -1091,12 +1148,7 @@ export function switchToNavigationView(
                         landmarkAnnouncedFar = false;
                         landmarkAnnouncedNear = false;
                         if (nav.progress.arrived) {
-                            showNavArrived(root);
-                            feedback.cancelPending();
-                            feedback.playArrivalFeedback();
-                            navGps.stop();
-                            compass.stop();
-                            if (pocketMode) exitPocketMode();
+                            handleArrival();
                         } else {
                             const p = nav.progress;
                             updateNavProgress(root, p.currentIndex, p.total);
@@ -1124,16 +1176,7 @@ export function switchToNavigationView(
                     const target = nav.targetBreadcrumb;
                     if (target) {
                         const dist = haversineMeters(breadcrumb, target);
-                        if (getSimpleMode()) {
-                            const distToStart = remainingTrailDistance(
-                                breadcrumb,
-                                trailBreadcrumbs,
-                                nav.progress.currentIndex
-                            );
-                            updateNavDistance(root, distToStart);
-                        } else {
-                            updateNavDistance(root, dist);
-                        }
+                        updateNavDistance(root, nav.remainingMeters(breadcrumb));
                         feedback.announceDistance(dist);
                         feedback.vibrateProximity(dist);
 
@@ -1157,14 +1200,30 @@ export function switchToNavigationView(
                         }
                     }
 
-                    if (!nav.isOffRoute && currentHeading() === null) {
-                        updateNavRecoveryHint(
-                            root,
-                            'Waiting for direction. Point your phone forward or walk a few steps.'
-                        );
-                    } else if (!nav.isOffRoute) {
-                        updateNavRecoveryHint(root, null);
+                    updateNavNextTurn(root, nav.nextTurn(breadcrumb));
+
+                    if (!nav.isOffRoute) {
+                        const nearest = nav.nearestPathPoint(breadcrumb);
+                        if (firstFix && nearest && nearest.distance > FAR_FROM_ROUTE_METERS) {
+                            updateNavRecoveryHint(
+                                root,
+                                `You are ${formatDistance(nearest.distance)} from your route. Head toward it, then follow the direction.`
+                            );
+                        } else if (currentHeading() === null) {
+                            updateNavRecoveryHint(
+                                root,
+                                'Waiting for direction. Point your phone forward or walk a few steps.'
+                            );
+                        } else if (nav.inGap) {
+                            updateNavRecoveryHint(
+                                root,
+                                'GPS was lost along this stretch, so the route is a straight-line guess. Head for the next point.'
+                            );
+                        } else {
+                            updateNavRecoveryHint(root, null);
+                        }
                     }
+                    firstFix = false;
 
                     refreshArrow();
                     const headingForSimple = currentHeading();
@@ -1206,6 +1265,17 @@ export function switchToNavigationView(
         wakeLock.destroy();
     }
 
+    /** Leave navigation and go back to the recording screen. */
+    function leaveNavigation(): void {
+        feedback.cancelPending();
+        compass.stop();
+        navGps.stop();
+        cleanupPocketMode();
+        root.classList.remove('nav-active');
+        mountAppShell(root);
+        startRecording(root);
+    }
+
     const stopBtn = root.querySelector<HTMLButtonElement>('#btn-stop-navigation');
     if (stopBtn) {
         const HOLD_MS = 1000;
@@ -1219,15 +1289,7 @@ export function switchToNavigationView(
             stopBtn!.classList.remove('btn-hold--active');
         }
 
-        function doStop(): void {
-            feedback.cancelPending();
-            compass.stop();
-            navGps.stop();
-            cleanupPocketMode();
-            root.classList.remove('nav-active');
-            mountAppShell(root);
-            startRecording(root);
-        }
+        const doStop = leaveNavigation;
 
         stopBtn.addEventListener('pointerdown', (e: PointerEvent) => {
             e.preventDefault();
@@ -1251,6 +1313,9 @@ export function switchToNavigationView(
         stopBtn.addEventListener('click', (e: MouseEvent) => e.preventDefault());
     }
 }
+
+/** On the first fix, further than this from the route gets an immediate "head toward it" message. */
+const FAR_FROM_ROUTE_METERS = 100;
 
 let modalOpen = false;
 

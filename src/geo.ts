@@ -127,29 +127,6 @@ export function simplifyPolyline(points: Breadcrumb[], toleranceMeters: number):
     return kept;
 }
 
-/**
- * Sum of haversine distances along the trail from currentPos through
- * remaining breadcrumbs starting at trailIndex.
- * Returns the approximate walking distance left to the end of the trail.
- */
-export function remainingTrailDistance(
-    currentPos: Breadcrumb,
-    trail: Breadcrumb[],
-    trailIndex: number
-): number {
-    if (trailIndex >= trail.length) return 0;
-
-    // Distance from current position to the current target
-    let total = haversineMeters(currentPos, trail[trailIndex]);
-
-    // Plus distances between successive remaining breadcrumbs
-    for (let i = trailIndex; i < trail.length - 1; i++) {
-        total += haversineMeters(trail[i], trail[i + 1]);
-    }
-
-    return total;
-}
-
 /** Sum the distance through all consecutive breadcrumbs in a trail. */
 export function trailDistanceMeters(trail: Breadcrumb[]): number {
     let total = 0;

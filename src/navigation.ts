@@ -159,6 +159,8 @@ export interface NavigationService {
     distanceToTrailMeters(pos: Breadcrumb): number;
     /** The ordered trail being followed (reversed for retrace). */
     readonly trail: readonly Breadcrumb[];
+    /** True while walking a stretch where GPS was lost when it was recorded (a guessed line). */
+    readonly inGap: boolean;
     /** Corners along the trail, in walking order. */
     readonly turns: readonly TurnPoint[];
     /** Path distance still to walk from `pos` to the end of the trail (0 once arrived). */
@@ -334,13 +336,16 @@ export function createNavigationService(): NavigationService {
     let cumulative: number[] = [];
     let turns: TurnPoint[] = [];
     let currentIndex = 0;
+    /** Retrace (true): the trail end is where the user started, so being near it means arrived. */
+    let retraceMode = true;
 
     // Off-route detection state
     let offRoute = false;
     let offRouteConsecutiveFixes = 0;
     let onOffRouteChange: ((offRoute: boolean) => void) | null = null;
 
-    function prepare(ordered: Breadcrumb[]): void {
+    function prepare(ordered: Breadcrumb[], retrace: boolean): void {
+        retraceMode = retrace;
         trail = ordered;
         currentIndex = 0;
         offRoute = false;
@@ -355,11 +360,11 @@ export function createNavigationService(): NavigationService {
     }
 
     function load(breadcrumbs: Breadcrumb[]): void {
-        prepare([...breadcrumbs].reverse());
+        prepare([...breadcrumbs].reverse(), true);
     }
 
     function loadForward(breadcrumbs: Breadcrumb[]): void {
-        prepare([...breadcrumbs]);
+        prepare([...breadcrumbs], false);
     }
 
     /** Last trail index that may be reached from the current target in one step. */
@@ -387,11 +392,25 @@ export function createNavigationService(): NavigationService {
         );
     }
 
-    /** Combined 1-sigma-ish uncertainty of two fixes (root sum of squares of accuracies). */
-    function combinedAccuracy(a: Breadcrumb, b: Breadcrumb): number {
-        const accA = Number.isFinite(a.accuracy) ? a.accuracy : 0;
-        const accB = Number.isFinite(b.accuracy) ? b.accuracy : 0;
-        return Math.hypot(accA, accB);
+    /**
+     * Arrival radius for the final crumb. The start point was itself recorded with some
+     * error, so allow for both the fix's and the crumb's accuracy (root sum of squares).
+     */
+    function finalArrivalRadius(pos: Breadcrumb, last: Breadcrumb, threshold: number): number {
+        const posAccuracy = Number.isFinite(pos.accuracy) ? pos.accuracy : 0;
+        const lastAccuracy = Number.isFinite(last.accuracy) ? last.accuracy : 0;
+        return Math.max(
+            proximityThresholdMeters(pos, last, threshold),
+            Math.min(Math.hypot(posAccuracy, lastAccuracy), MAX_ACCURACY_ASSIST_METERS)
+        );
+    }
+
+    /** Whether the segment between trail[k] and trail[k + 1] was recorded across a GPS gap. */
+    function isGapSegment(k: number): boolean {
+        if (k < 0 || k >= trail.length - 1) return false;
+        // The gap flag sits on the crumb recorded AFTER the gap: the later one in walking
+        // order when following, the earlier one when retracing.
+        return retraceMode ? trail[k].gap === true : trail[k + 1].gap === true;
     }
 
     /**
@@ -451,14 +470,10 @@ export function createNavigationService(): NavigationService {
         // window, so one noisy crumb does not strand the user.
         const end = windowEnd();
         for (let i = currentIndex; i <= end; i++) {
-            let radius = proximityThresholdMeters(pos, trail[i], threshold);
-            if (i === trail.length - 1) {
-                // The start point was itself recorded with some error: allow for both.
-                radius = Math.max(
-                    radius,
-                    Math.min(combinedAccuracy(pos, trail[i]), MAX_ACCURACY_ASSIST_METERS)
-                );
-            }
+            const isLast = i === trail.length - 1;
+            const radius = isLast
+                ? finalArrivalRadius(pos, trail[i], threshold)
+                : proximityThresholdMeters(pos, trail[i], threshold);
             if (haversineMeters(pos, trail[i]) <= radius) {
                 currentIndex = i + 1;
                 break;
@@ -471,6 +486,17 @@ export function createNavigationService(): NavigationService {
             hasPassed(pos, trail[currentIndex], trail[currentIndex + 1], threshold)
         ) {
             currentIndex++;
+        }
+
+        // Retracing: the trail end is where the user started. Standing at it means they are
+        // back, however the recorded path got there (the path may loop past its own start).
+        // Off the path this uses the plain arrival zone; the wider allowance for the start
+        // crumb's own error is only for someone who has followed the path all the way in.
+        if (retraceMode && currentIndex < trail.length) {
+            const last = trail[trail.length - 1];
+            if (haversineMeters(pos, last) <= proximityThresholdMeters(pos, last, threshold)) {
+                currentIndex = trail.length;
+            }
         }
 
         return currentIndex > before;
@@ -566,6 +592,9 @@ export function createNavigationService(): NavigationService {
         nearestPathPoint,
         get trail(): readonly Breadcrumb[] {
             return trail;
+        },
+        get inGap(): boolean {
+            return isGapSegment(currentIndex - 1);
         },
         get turns(): readonly TurnPoint[] {
             return turns;

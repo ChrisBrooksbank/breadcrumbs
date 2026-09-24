@@ -144,14 +144,20 @@ describe('NavigationService – proximity detection and index advancement', () =
     });
 
     it('advances through all breadcrumbs sequentially', () => {
-        // Target is breadcrumbs[2], then [1], then [0]
-        expect(service.targetBreadcrumb).toEqual(breadcrumbs[2]);
+        // Crumbs ~33 m apart so each one is reached separately
+        const spread = [
+            makeBreadcrumb(51.5, -0.1),
+            makeBreadcrumb(51.5003, -0.1),
+            makeBreadcrumb(51.5006, -0.1),
+        ];
+        service.load(spread);
+        expect(service.targetBreadcrumb).toEqual(spread[2]);
 
-        service.advanceIfClose(makeBreadcrumb(51.5002, -0.1), 15);
-        expect(service.targetBreadcrumb).toEqual(breadcrumbs[1]);
+        service.advanceIfClose(makeBreadcrumb(51.5006, -0.1), 15);
+        expect(service.targetBreadcrumb).toEqual(spread[1]);
 
-        service.advanceIfClose(makeBreadcrumb(51.5001, -0.1), 15);
-        expect(service.targetBreadcrumb).toEqual(breadcrumbs[0]);
+        service.advanceIfClose(makeBreadcrumb(51.5003, -0.1), 15);
+        expect(service.targetBreadcrumb).toEqual(spread[0]);
     });
 
     it('target becomes null after reaching final breadcrumb', () => {
@@ -1077,10 +1083,79 @@ describe('NavigationService – strict, windowed progress', () => {
 
     it('does not extend arrival for precise fixes', () => {
         const service = createNavigationService();
-        service.load([offsetCrumb(0, 0), offsetCrumb(0, 10)]);
-        service.advanceIfClose(offsetCrumb(0, 10));
+        service.load([offsetCrumb(0, 0), offsetCrumb(0, 10), offsetCrumb(0, 40)]);
+        service.advanceIfClose(offsetCrumb(0, 40));
         service.advanceIfClose(offsetCrumb(0, 26)); // accuracy 5 both ways
         expect(service.progress.arrived).toBe(false);
+    });
+
+    it('when retracing, standing at the start counts as arrived even if the path loops past it', () => {
+        // A loop recorded back to within 8 m of where it began, then retraced from its end
+        const loop = [
+            ...line(0, 0, 0, 100),
+            ...line(0, 100, 100, 100).slice(1),
+            ...line(100, 100, 100, 0).slice(1),
+            ...line(100, 0, 8, -2).slice(1),
+        ];
+        const service = createNavigationService();
+        service.load(loop);
+        service.advanceIfClose(offsetCrumb(8, -2));
+        expect(service.progress.arrived).toBe(true);
+    });
+
+    it('when retracing, arrives on reaching the start by a shortcut, not only by the recorded path', () => {
+        const service = createNavigationService();
+        service.load(line(0, 0, 0, 300));
+        service.advanceIfClose(offsetCrumb(0, 300));
+        expect(service.progress.arrived).toBe(false);
+        // Cut straight across to the start, far from the recorded path's remaining crumbs
+        service.advanceIfClose(offsetCrumb(4, 5));
+        expect(service.progress.arrived).toBe(true);
+    });
+
+    it('when following a saved loop, being at its start is NOT arrival at its end', () => {
+        const loop = [
+            ...line(0, 0, 0, 100),
+            ...line(0, 100, 100, 100).slice(1),
+            ...line(100, 100, 8, -2).slice(1),
+        ];
+        const service = createNavigationService();
+        service.loadForward(loop);
+        service.advanceIfClose(offsetCrumb(0, 0));
+        expect(service.progress.arrived).toBe(false);
+    });
+});
+
+describe('NavigationService – GPS gaps', () => {
+    it('flags the leg being walked when it was recorded across a GPS gap (retrace)', () => {
+        // Recorded order: a, b, c(gap) - the gap lies between b and c
+        const a = offsetCrumb(0, 0);
+        const b = offsetCrumb(0, 30);
+        const c = { ...offsetCrumb(0, 200), gap: true };
+        const service = createNavigationService();
+        service.load([a, b, c]); // walking back: c, b, a
+        expect(service.inGap).toBe(false);
+
+        service.advanceIfClose(c); // reached c, now heading for b across the gap
+        expect(service.inGap).toBe(true);
+        service.advanceIfClose(b);
+        expect(service.inGap).toBe(false);
+    });
+
+    it('flags the leg walked across a gap when following forwards', () => {
+        const a = offsetCrumb(0, 0);
+        const b = { ...offsetCrumb(0, 200), gap: true };
+        const c = offsetCrumb(0, 230);
+        const service = createNavigationService();
+        service.loadForward([a, b, c]);
+        service.advanceIfClose(a); // reached a, heading for b across the gap
+        expect(service.inGap).toBe(true);
+        service.advanceIfClose(b);
+        expect(service.inGap).toBe(false);
+    });
+
+    it('is false with nothing loaded', () => {
+        expect(createNavigationService().inGap).toBe(false);
     });
 });
 

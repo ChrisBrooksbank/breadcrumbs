@@ -154,19 +154,31 @@ Goal: an arrow the user can believe.
 - [ ] Not done: a magnetic declination model. The learned offset covers it once the user has walked a few steps; only the first few seconds before walking are affected (typically < 15 deg)
 - [ ] Not done: iOS tilt handling is left to `webkitCompassHeading`; verify on a real iPhone held upright
 
-### Phase 13: Retrace Engine
+### Phase 13: Retrace Engine - DONE (four items deferred)
 
-Goal: get back correctly, including loops and out-and-back routes.
+Goal: get back correctly, including loops and out-and-back routes. Decision (user, PWA-only): follow the path **strictly** by default; shortcuts are not taken just because two parts of the path are physically close.
 
-- [ ] Add `simplifyTrail()` (Douglas-Peucker, tolerance ~ accuracy-aware, min 3-5 m) to `geo.ts`; navigate the simplified path, keep raw for display/saving
-- [ ] Replace crumb-by-crumb advance in `navigation.ts` with monotonic progress along the path: project position onto the path within a forward window; never jump beyond the window; never go backwards; remove the unbounded skip-ahead loop and the `trail[0]` pre-advance in `main.ts`
-- [ ] Track `distanceRemaining` along the path (always shown, not only in Simple mode) and an ETA at current walking speed
-- [ ] Derive turn points from the simplified path (bearing change > ~35deg) with distance to the next turn
-- [ ] Off-route recovery: when off the trail, point at the nearest path point (with distance), then resume path following; announce "back on route"
-- [ ] Keep recording while returning (append the detour); "Take me back" again from a new position works
-- [ ] Wait for the first real fix before showing distance/direction (no faked `currentPos`); warn if the current position is far from the trail end
-- [ ] Explicit arrived state: confirm within accuracy-aware radius, offer "Done" / "Save route"
-- [ ] Tests using the Phase 10 scenarios: loop, out-and-back, self-crossing, noisy trail, gap
+- [x] `geo.ts`: `simplifyPolyline` (iterative Douglas-Peucker) and `closestPointOnSegment`
+- [x] Strict windowed progress in `navigation.ts`: advancing only considers crumbs within ~45 m of path ahead (at least 2 crumbs), so hairpins, loops and out-and-back paths are never short-cut by mere closeness; the old unbounded skip-ahead loop is gone. Walking past a crumb up to 30 m sideways still advances (the old 15-30 m dead zone). Progress never moves backwards
+- [x] Rejoin after a detour: at the moment the walker comes back on route it snaps to the EARLIEST remaining segment within 30 m (never the nearest, never a standing shortcut). Off-route is now measured against the path still to walk, and not evaluated after arrival
+- [x] Arrival: retrace mode counts being at the start point as arrived from anywhere (a loop walked back to the car is done straight away); the wider allowance for the start crumb's own accuracy applies only when following the path in. Follow mode stays strict (being at the start of a saved loop is not arrival)
+- [x] Remaining distance to the start along the path (`remainingMeters`), now the main number in both full and simple mode ("to start" / "to finish")
+- [x] Turn points (`findTurns`, `nextTurn`) from a simplified copy of the path; "Turn left in 40 m" shown in both views, highlighted within 40 m. Left/right correctly mirror when retracing
+- [x] Off-route recovery: the arrow points at the nearest point of the remaining route and the message says how far away it is; a first fix over 100 m from the route says so immediately
+- [x] No faked start position: navigation shows "Finding your position..." until the first real fix (was: assumed the user stood on the last crumb)
+- [x] `GPS gap` awareness: `Breadcrumb.gap` (Phase 11) now yields `inGap`, with a "route is a straight-line guess" hint
+- [x] Arrival state: "Done" (clears the finished session so the app starts fresh; leaves the session alone when following a saved route) and "Save this route" instead of a hold-to-confirm stop button
+- [x] Tests: engine rules, 40-seed scenario statistics, on-screen guidance and arrival flows
+- [ ] Deferred: navigating on the simplified path. Progress stays crumb-based so the crumb countdown that field testers liked still works; simplification is used for turn detection only
+- [ ] Deferred: ETA at walking speed
+- [ ] Deferred: recording the return leg. The safety-net need (getting lost on the way back) is met by off-route recovery to the nearest point of the outbound path; appending a return leg to the same session would make a second "Take me back" ambiguous. Revisit with a session-segment model
+- [ ] Deferred: a "shortcut" setting (take physical shortcuts across doubled-back paths) - only if field testing asks for it
+- [ ] Deferred: a better start point. The start crumb is a single raw fix; averaging the first fixes while stationary would help "exact start"
+
+#### Phase 13 findings
+
+- The single-seed "arrives 62 m away with weak GPS" failure from Phase 10 was mostly a noise floor: at 20 m accuracy both the recorded start and the returning fix can each be 25-30 m off. Over 40 seeds arrival is always reached; p90 distance to the true start is ~25 m at 8 m accuracy and ~3x accuracy at 20 m. Tests now assert those limits instead of a single seed
+- The real premature-arrival mechanisms were unbounded skip-ahead and a lingering rejoin flag that snapped to the final segment; both are fixed and covered
 
 ### Phase 14: Garmin-style Single Screen
 

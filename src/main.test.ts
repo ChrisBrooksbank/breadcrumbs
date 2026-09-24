@@ -768,8 +768,7 @@ describe('switchToNavigationView – live navigation', () => {
         };
     });
 
-    it('uses the last recorded point for immediate return guidance', async () => {
-        // Seed two breadcrumbs into the session
+    it('waits for a real GPS fix instead of assuming the user is at the last recorded point', async () => {
         await appendBreadcrumb({ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 });
         await appendBreadcrumb({ lat: 51.501, lng: -0.1, accuracy: 5, timestamp: 2000 });
 
@@ -777,10 +776,25 @@ describe('switchToNavigationView – live navigation', () => {
         switchToNavigationView(root);
         await new Promise(resolve => setTimeout(resolve, 50));
 
-        const progressText = root.querySelector('#nav-progress-text');
-        const distanceText = root.querySelector('#nav-distance-value');
-        expect(progressText?.textContent).toMatch(/Breadcrumb 2 of 2/);
-        expect(distanceText?.textContent).not.toBe('-- m');
+        expect(root.querySelector('#nav-progress-text')?.textContent).toMatch(/Breadcrumb 1 of 2/);
+        expect(root.querySelector('#nav-distance-value')?.textContent).toBe('-- m');
+        expect(root.querySelector('#nav-recovery-hint')?.textContent).toContain(
+            'Finding your position'
+        );
+
+        // First fix: standing at the last recorded point
+        watchPositionCallback({
+            coords: { latitude: 51.501, longitude: -0.1, accuracy: 5 },
+            timestamp: 3000,
+        } as GeolocationPosition);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        expect(root.querySelector('#nav-progress-text')?.textContent).toMatch(/Breadcrumb 2 of 2/);
+        expect(root.querySelector('#nav-distance-value')?.textContent).not.toBe('-- m');
+        // Position known, but no compass or movement yet to say which way the user faces
+        expect(root.querySelector('#nav-recovery-hint')?.textContent).toContain(
+            'Waiting for direction'
+        );
     });
 
     it('updates distance display when GPS position received during navigation', async () => {
@@ -805,7 +819,7 @@ describe('switchToNavigationView – live navigation', () => {
         expect(distanceEl?.textContent).toMatch(/m|km/);
     });
 
-    it('simulated return advances from the turnaround point and shows distance to the next target immediately', async () => {
+    it('simulated return advances from the turnaround point and shows the total distance left to the start', async () => {
         await appendBreadcrumb({ lat: 51.5, lng: -0.1, accuracy: 5, timestamp: 1000 });
         await appendBreadcrumb({ lat: 51.5005, lng: -0.1, accuracy: 5, timestamp: 2000 });
         await appendBreadcrumb({ lat: 51.501, lng: -0.1, accuracy: 5, timestamp: 3000 });
@@ -824,7 +838,8 @@ describe('switchToNavigationView – live navigation', () => {
         const progressText = root.querySelector('#nav-progress-text');
         const distanceEl = root.querySelector('#nav-distance-value');
         expect(progressText?.textContent).toMatch(/Breadcrumb 2 of 3/);
-        expect(distanceEl?.textContent).toMatch(/5[0-9] m/);
+        // 55 m to the next crumb plus 55 m more back to the start
+        expect(distanceEl?.textContent).toMatch(/11[0-9] m/);
     });
 
     it('shows recovery guidance after sustained off-trail fixes', async () => {
