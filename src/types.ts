@@ -4,6 +4,11 @@ export interface Breadcrumb {
     accuracy: number;
     timestamp: number;
     label?: string;
+    /**
+     * True when GPS was lost between the previous crumb and this one and the walker moved
+     * far in the meantime, so the segment leading to this crumb is a straight-line guess.
+     */
+    gap?: boolean;
 }
 
 export interface Session {

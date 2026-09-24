@@ -4,7 +4,9 @@ import {
     type ErrorCallback,
     bearingDelta,
     adaptiveThreshold,
+    medianFix,
 } from '@/gps';
+import { haversineMeters } from '@/geo';
 
 function makePosition(
     lat: number,
@@ -139,8 +141,10 @@ describe('GeolocationService – filtering logic', () => {
             watchCallback(makePosition(51.5, -0.1, 5, 1000));
             // Second breadcrumb ~1m from first (dropped)
             watchCallback(makePosition(51.500009, -0.1, 5, 2000));
-            // Third breadcrumb ~11m from first (should be accepted since last accepted is still first)
+            // Third and fourth fixes ~11m from first: a sustained move (a single 11m fix would be
+            // treated as a spike by the median filter). Still measured from the first breadcrumb.
             watchCallback(makePosition(51.5001, -0.1, 5, 3000));
+            watchCallback(makePosition(51.5001, -0.1, 5, 4000));
 
             expect(onBreadcrumb).toHaveBeenCalledTimes(2);
         });
@@ -823,5 +827,119 @@ describe('GeolocationService – adaptive threshold in practice', () => {
         watchCallback(makePosition(51.500459, 0.0, 5, 1000));
 
         expect(onBreadcrumb).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('medianFix', () => {
+    it('takes the per-axis median and the newest accuracy and timestamp', () => {
+        const result = medianFix([
+            { lat: 1, lng: 10, accuracy: 5, timestamp: 100 },
+            { lat: 9, lng: 12, accuracy: 6, timestamp: 200 },
+            { lat: 2, lng: 30, accuracy: 7, timestamp: 300 },
+        ]);
+        expect(result).toEqual({ lat: 2, lng: 12, accuracy: 7, timestamp: 300 });
+    });
+});
+
+describe('GeolocationService – noise rejection when recording', () => {
+    let watchCallback: PositionCallback;
+
+    beforeEach(() => {
+        vi.stubGlobal('navigator', {
+            geolocation: {
+                watchPosition: vi.fn((success: PositionCallback) => {
+                    watchCallback = success;
+                    return 1;
+                }),
+                clearWatch: vi.fn(),
+            },
+        });
+        return () => {
+            vi.unstubAllGlobals();
+        };
+    });
+
+    function record(fixes: Array<[number, number, number, number]>) {
+        const service = createGeolocationService({ disableMotionSuspension: true });
+        const crumbs: Array<{ lat: number; lng: number }> = [];
+        service.start(b => crumbs.push(b));
+        for (const [lat, lng, accuracy, t] of fixes) {
+            watchCallback(makePosition(lat, lng, accuracy, t));
+        }
+        return crumbs;
+    }
+
+    it('does not record an isolated wild fix', () => {
+        const crumbs = record([
+            [51.5, -0.1, 5, 1000],
+            [51.5001, -0.1, 5, 2000],
+            [51.51, -0.1, 5, 3000], // ~1.1 km spike
+            [51.5003, -0.1, 5, 4000],
+            [51.5004, -0.1, 5, 5000],
+            [51.5006, -0.1, 5, 6000],
+        ]);
+        expect(crumbs.length).toBeGreaterThan(1);
+        expect(crumbs.every(c => c.lat < 51.502)).toBe(true);
+    });
+
+    it('spaces crumbs at least as far apart as the fix accuracy', () => {
+        // Steady 15 m steps north with 20 m accuracy
+        const fixes: Array<[number, number, number, number]> = [];
+        for (let i = 0; i < 20; i++) fixes.push([51.5 + i * 0.000135, -0.1, 20, 1000 * (i + 1)]);
+        const crumbs = record(fixes);
+        expect(crumbs.length).toBeGreaterThan(2);
+        for (let i = 1; i < crumbs.length; i++) {
+            expect(
+                haversineMeters(
+                    { ...crumbs[i - 1], accuracy: 0, timestamp: 0 },
+                    { ...crumbs[i], accuracy: 0, timestamp: 0 }
+                )
+            ).toBeGreaterThanOrEqual(20);
+        }
+    });
+
+    it('does not blend positions across a long pause between fixes', () => {
+        const crumbs = record([
+            [51.5, -0.1, 5, 1000],
+            [51.5, -0.1, 5, 2000],
+            [51.5, -0.1, 5, 3000],
+            [51.52, -0.1, 5, 60_000], // 2 km away after a 57 s gap
+        ]);
+        expect(crumbs[crumbs.length - 1].lat).toBe(51.52);
+    });
+
+    it('flags the crumb after a long GPS dropout with a big jump as a gap', () => {
+        const crumbs = record([
+            [51.5, -0.1, 5, 1000],
+            [51.5001, -0.1, 5, 2000],
+            [51.5002, -0.1, 5, 3000],
+            [51.502, -0.1, 5, 60_000], // ~200 m away after a 57 s silence
+        ]) as Array<{ lat: number; gap?: boolean }>;
+        const last = crumbs[crumbs.length - 1];
+        expect(last.lat).toBe(51.502);
+        expect(last.gap).toBe(true);
+        expect(crumbs.slice(0, -1).some(c => c.gap === true)).toBe(false);
+    });
+
+    it('does not flag a gap when the silence is long but the walker barely moved', () => {
+        const crumbs = record([
+            [51.5, -0.1, 5, 1000],
+            [51.5, -0.1, 5, 2000],
+            [51.5, -0.1, 5, 3000],
+            [51.50005, -0.1, 5, 300_000], // ~5 m after a 5 minute pause (e.g. a cafe stop)
+            [51.50011, -0.1, 5, 301_000],
+            [51.50022, -0.1, 5, 302_000],
+        ]) as Array<{ gap?: boolean }>;
+        expect(crumbs.some(c => c.gap === true)).toBe(false);
+    });
+
+    it('does not flag a gap for a big jump after only a short silence', () => {
+        const crumbs = record([
+            [51.5, -0.1, 5, 1000],
+            [51.5001, -0.1, 5, 2000],
+            [51.5002, -0.1, 5, 3000],
+            [51.5012, -0.1, 5, 8000], // ~110 m in 5 s: implausible but not a dropout
+        ]) as Array<{ gap?: boolean }>;
+        expect(crumbs.some(c => c.gap === true)).toBe(false);
     });
 });

@@ -8,6 +8,15 @@ const STRAIGHT_DISTANCE_METERS = 20;
 const MAX_GAP_METERS = 50;
 const MAX_ACCURACY_METERS = 30;
 
+/** No fixes for this long AND a jump of GAP_MIN_DISTANCE_METERS marks an unobserved gap. */
+const GAP_MIN_MS = 30_000;
+const GAP_MIN_DISTANCE_METERS = 60;
+
+/** Number of recent fixes whose per-axis median is recorded (rejects isolated spikes). */
+const MEDIAN_WINDOW = 3;
+/** A pause longer than this between fixes starts the median window afresh. */
+const MEDIAN_WINDOW_RESET_MS = 10_000;
+
 /** Bearing change > 30° means we're turning */
 const TURN_BEARING_THRESHOLD = 30;
 /** Bearing change < 15° counts as straight */
@@ -52,6 +61,26 @@ export function adaptiveThreshold(bearingHistory: number[]): number {
     }
 
     return DEFAULT_DISTANCE_METERS;
+}
+
+function median(values: number[]): number {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Per-axis median of the given fixes, stamped with the newest fix's accuracy and time.
+ * A single wild fix in an odd-sized window never survives, and a steady walk is unaffected
+ * apart from lagging by one fix.
+ */
+export function medianFix(window: Breadcrumb[]): Breadcrumb {
+    const latest = window[window.length - 1];
+    return {
+        lat: median(window.map(f => f.lat)),
+        lng: median(window.map(f => f.lng)),
+        accuracy: latest.accuracy,
+        timestamp: latest.timestamp,
+    };
 }
 
 export type BreadcrumbCallback = (breadcrumb: Breadcrumb) => void;
@@ -99,6 +128,12 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
     let currentMovementBearing: number | null = null;
     let currentSpeedMs: number | null = null;
 
+    // Set when a GPS dropout is detected; attached to the next recorded crumb
+    let pendingGap = false;
+
+    // Recent accepted-accuracy fixes for the median filter (recording only)
+    const medianWindow: Breadcrumb[] = [];
+
     // Bearing history for adaptive threshold (from raw fixes with meaningful movement)
     const rawBearingHistory: number[] = [];
 
@@ -133,6 +168,17 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                     accuracy,
                     timestamp: now,
                 };
+
+                // Detect a GPS dropout: long silence plus a big jump means the route in between
+                // was not observed.
+                if (
+                    lastRawFix !== null &&
+                    lastRawTimestamp !== null &&
+                    now - lastRawTimestamp > GAP_MIN_MS &&
+                    haversineMeters(lastRawFix, rawFix) > GAP_MIN_DISTANCE_METERS
+                ) {
+                    pendingGap = true;
+                }
 
                 // Update movement bearing and speed from every raw fix
                 if (lastRawFix !== null) {
@@ -227,15 +273,35 @@ export function createGeolocationService(options?: GeolocationServiceOptions): G
                     timestamp: position.timestamp,
                 };
 
+                // Navigation wants every raw fix; recording filters noise before deciding.
+                let recorded = candidate;
+                if (!emitEveryFix) {
+                    const previous = medianWindow[medianWindow.length - 1];
+                    if (
+                        previous &&
+                        candidate.timestamp - previous.timestamp > MEDIAN_WINDOW_RESET_MS
+                    ) {
+                        medianWindow.length = 0;
+                    }
+                    medianWindow.push(candidate);
+                    if (medianWindow.length > MEDIAN_WINDOW) medianWindow.shift();
+                    if (medianWindow.length === MEDIAN_WINDOW) recorded = medianFix(medianWindow);
+                }
+
                 if (!emitEveryFix && lastBreadcrumb !== null) {
-                    const distance = haversineMeters(lastBreadcrumb, candidate);
-                    const threshold = adaptiveThreshold(rawBearingHistory);
-                    // Always accept if gap exceeds the maximum, otherwise apply adaptive threshold
+                    const distance = haversineMeters(lastBreadcrumb, recorded);
+                    // Never place crumbs closer together than the fix's own uncertainty.
+                    const threshold = Math.max(adaptiveThreshold(rawBearingHistory), accuracy);
+                    // Always accept if gap exceeds the maximum, otherwise apply the threshold
                     if (distance < threshold && distance < MAX_GAP_METERS) return;
                 }
 
-                lastBreadcrumb = candidate;
-                onBreadcrumb(candidate);
+                if (pendingGap) {
+                    recorded = { ...recorded, gap: true };
+                    pendingGap = false;
+                }
+                lastBreadcrumb = recorded;
+                onBreadcrumb(recorded);
             },
             error => {
                 onError?.(error);

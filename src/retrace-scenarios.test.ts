@@ -205,16 +205,15 @@ describe('recording scenarios: trail quality', () => {
         expect(trailDistanceMeters(recorded) / polylineLength(route)).toBeLessThan(1.5);
     });
 
-    // Phase 11: the distance filter ignores accuracy, so a 20 m-accuracy receiver wandering
-    // around the true line produces a trail ~3.3x too long.
-    it.fails('[Phase 11] a weak-GPS straight walk does not inflate the trail length', () => {
+    // Regression: crumbs closer than the fix accuracy used to make a 20 m-accuracy walk ~3.3x too long.
+    it('a weak-GPS straight walk does not inflate the trail length', () => {
         const route = SCENARIO_ROUTES.straight;
         const recorded = walkAndRecord(route, 7, 20);
         expect(trailDistanceMeters(recorded) / polylineLength(route)).toBeLessThan(1.5);
     });
 
-    // Phase 11: standing still for two minutes with normal receiver drift adds ~80 crumbs.
-    it.fails('[Phase 11] standing still does not drop a cloud of crumbs', () => {
+    // Regression: two minutes of receiver drift used to add ~80 crumbs.
+    it('standing still does not drop a cloud of crumbs', () => {
         const clean = walkWaypoints(SCENARIO_ROUTES.straight);
         const withStop = (): Breadcrumb[] => {
             const rng = createRng(3);
@@ -225,17 +224,16 @@ describe('recording scenarios: trail quality', () => {
         expect(extra).toBeLessThanOrEqual(5);
     });
 
-    // Phase 11: a single wild fix (60 m off, still reporting good accuracy) is recorded.
-    it.fails('[Phase 11] an isolated GPS spike is not recorded as a breadcrumb', () => {
+    // Regression: a single wild fix (60 m off, still reporting good accuracy) used to be recorded.
+    it('an isolated GPS spike is not recorded as a breadcrumb', () => {
         const rng = createRng(11);
         const clean = walkWaypoints(SCENARIO_ROUTES.straight);
         const spiky = addOutliers(addJitter(clean, rng, 0.5), rng, 0.05, 60);
         expect(worstCrossTrackMeters(recordTrack(spiky))).toBeLessThanOrEqual(25);
     });
 
-    // Phase 11: a two-minute GPS dropout leaves a ~180 m straight-line jump between
-    // consecutive crumbs with nothing marking it as a gap.
-    it.fails('[Phase 11] a GPS dropout is flagged on the crumb after the gap', () => {
+    // Regression: a two-minute GPS dropout used to leave a ~180 m jump with nothing marking it.
+    it('a GPS dropout is flagged on the crumb after the gap', () => {
         const rng = createRng(5);
         const clean = walkWaypoints(SCENARIO_ROUTES.straight);
         const gapped = dropFixes(addJitter(clean, rng, 0.5), 100_000, 220_000);
