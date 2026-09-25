@@ -178,7 +178,9 @@ describe('FeedbackService – audio tones', () => {
             createOscillator: vi.fn(() => mockOscillator),
             createGain: vi.fn(() => mockGain),
         };
-        AudioContextMock = vi.fn(() => mockAudioContext);
+        AudioContextMock = vi.fn(function () {
+            return mockAudioContext;
+        });
         vi.stubGlobal('AudioContext', AudioContextMock);
     });
 
@@ -533,7 +535,9 @@ describe('FeedbackService – vibration audio fallback (iOS/unsupported)', () =>
         };
         vi.stubGlobal(
             'AudioContext',
-            vi.fn(() => mockAudioContext)
+            vi.fn(function () {
+                return mockAudioContext;
+            })
         );
     });
 
@@ -677,14 +681,16 @@ describe('FeedbackService – playTone resilience', () => {
         // AudioContext that throws on createOscillator
         vi.stubGlobal(
             'AudioContext',
-            vi.fn(() => ({
-                currentTime: 0,
-                destination: {},
-                createOscillator: vi.fn(() => {
-                    throw new Error('AudioContext restricted');
-                }),
-                createGain: vi.fn(),
-            }))
+            vi.fn(function () {
+                return {
+                    currentTime: 0,
+                    destination: {},
+                    createOscillator: vi.fn(() => {
+                        throw new Error('AudioContext restricted');
+                    }),
+                    createGain: vi.fn(),
+                };
+            })
         );
     });
 

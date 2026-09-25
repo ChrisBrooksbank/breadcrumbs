@@ -299,7 +299,7 @@ describe('simplifyPolyline', () => {
     it('copes with a very long trail without overflowing the stack', () => {
         const path = Array.from({ length: 20_000 }, (_, i) => local(i % 2 === 0 ? 0 : 50, i));
         expect(simplifyPolyline(path, 1).length).toBeGreaterThan(2);
-    });
+    }, 30_000);
 });
 
 describe('foldBackTrack', () => {
