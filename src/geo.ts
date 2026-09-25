@@ -137,6 +137,33 @@ export function trailDistanceMeters(trail: Breadcrumb[]): number {
 }
 
 /**
+ * Drop a leg the walker has already started retracing. If the end of the trail lies on an
+ * earlier stretch of it (at least `minSeparationMeters` of walking ago), they have turned
+ * back, so the way home is the trail up to that earlier point, not the whole thing.
+ * Returns the trail unchanged when the end is not on the path already walked.
+ */
+export function foldBackTrack(
+    trail: Breadcrumb[],
+    radiusMeters = 20,
+    minSeparationMeters = 60
+): Breadcrumb[] {
+    if (trail.length < 3) return trail;
+    const cumulative: number[] = [0];
+    for (let i = 1; i < trail.length; i++) {
+        cumulative.push(cumulative[i - 1] + haversineMeters(trail[i - 1], trail[i]));
+    }
+    const end = trail[trail.length - 1];
+    const total = cumulative[cumulative.length - 1];
+    for (let j = 0; j < trail.length - 1; j++) {
+        if (cumulative[j + 1] > total - minSeparationMeters) break;
+        if (pointToSegmentMeters(end, trail[j], trail[j + 1]) <= radiusMeters) {
+            return trail.slice(0, j + 1);
+        }
+    }
+    return trail;
+}
+
+/**
  * Find a look-ahead point along the trail polyline, a given distance ahead
  * from startIndex. Interpolates between breadcrumbs when the distance falls
  * mid-segment. Returns the last breadcrumb if the trail is shorter than

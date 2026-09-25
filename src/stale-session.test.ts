@@ -1,7 +1,14 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mountAppShell, startRecording, formatAge, _resetModalOpen } from './main';
-import { appendBreadcrumb, clearSession, getSession } from './storage';
+import {
+    appendBreadcrumb,
+    clearSession,
+    deleteRoute,
+    getSession,
+    listRoutes,
+    saveRoute,
+} from './storage';
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -90,6 +97,45 @@ describe('stale session on open', () => {
         expect(root.querySelector('#route-quality')?.textContent).not.toContain('Continuing');
     });
 
+    it('"Start new route" keeps the old walk in Saved routes and drops only the oldest auto-saves', async () => {
+        for (const r of await listRoutes()) await deleteRoute(r.id);
+        const route = (id: string, date: number, auto?: boolean) => ({
+            id,
+            name: id,
+            date,
+            distance: 100,
+            breadcrumbCount: 2,
+            breadcrumbs: [],
+            ...(auto ? { auto } : {}),
+        });
+        await saveRoute(route('named-old', 1));
+        for (let i = 0; i < 20; i++) await saveRoute(route(`auto-${String(i)}`, 10 + i, true));
+
+        await appendBreadcrumb({
+            lat: 40,
+            lng: -74,
+            accuracy: 5,
+            timestamp: Date.now() - 3 * DAY_MS,
+        });
+        await appendBreadcrumb({
+            lat: 40.001,
+            lng: -74,
+            accuracy: 5,
+            timestamp: Date.now() - 3 * DAY_MS + 60_000,
+        });
+        startRecording(root);
+        await wait();
+        dialog()?.querySelector<HTMLButtonElement>('#btn-confirm-yes')?.click();
+        await wait(200);
+
+        const routes = await listRoutes();
+        const autos = routes.filter(r => r.auto === true);
+        expect(autos).toHaveLength(20);
+        expect(autos.some(r => r.id === 'auto-0')).toBe(false);
+        expect(routes.some(r => r.id === 'named-old')).toBe(true);
+        expect(autos.some(r => r.name.startsWith('Walk '))).toBe(true);
+    });
+
     it('"Keep old route" continues the old session', async () => {
         await seedOldRoute(3 * HOUR_MS);
         startRecording(root);
@@ -101,11 +147,13 @@ describe('stale session on open', () => {
         expect(root.querySelector('#route-quality')?.textContent).toContain(
             'Continuing your previous route'
         );
-        expect(root.querySelector<HTMLButtonElement>('#btn-take-me-back')?.disabled).toBe(false);
+        // One crumb is no walk to go back along yet
+        expect(root.querySelector<HTMLButtonElement>('#btn-take-me-back')?.disabled).toBe(true);
 
         sendFix(40.001, -74);
         await wait();
         expect((await getSession())?.breadcrumbs).toHaveLength(2);
+        expect(root.querySelector<HTMLButtonElement>('#btn-take-me-back')?.disabled).toBe(false);
     });
 
     it('dismissing the dialog (Escape) keeps the old route rather than deleting it', async () => {

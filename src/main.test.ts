@@ -174,8 +174,17 @@ describe('startRecording', () => {
 
         const takeBack = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
         const saveRoute = root.querySelector<HTMLButtonElement>('#btn-save-route');
-        expect(takeBack?.disabled).toBe(false);
+        // There is no walk to go back along yet
+        expect(takeBack?.disabled).toBe(true);
         expect(saveRoute?.disabled).toBe(false);
+
+        watchPositionCallback({
+            coords: { latitude: 51.5005, longitude: -0.1, accuracy: 5 },
+            timestamp: 60_000,
+        } as GeolocationPosition);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        expect(takeBack?.disabled).toBe(false);
     });
 
     it('shows permission denied error message on PERMISSION_DENIED', () => {
@@ -300,7 +309,7 @@ describe('startRecording', () => {
             timestamp: Date.now() - 60_000,
         });
         await appendBreadcrumb({
-            lat: 51.5001,
+            lat: 51.501,
             lng: -0.1,
             accuracy: 5,
             timestamp: Date.now() - 30_000,
@@ -731,6 +740,11 @@ describe('"Take me back" button switches to navigation view', () => {
             timestamp: 1000,
         } as GeolocationPosition);
 
+        await vi.advanceTimersByTimeAsync(50);
+        watchPositionCallback({
+            coords: { latitude: 51.5005, longitude: -0.1, accuracy: 5 },
+            timestamp: 60_000,
+        } as GeolocationPosition);
         await vi.advanceTimersByTimeAsync(50);
 
         const takeBackBtn = root.querySelector<HTMLButtonElement>('#btn-take-me-back');

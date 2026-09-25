@@ -11,7 +11,13 @@ import {
     clearSession,
     updateLastBreadcrumb,
 } from '@/storage';
-import { haversineMeters, bearingDegrees, lookAheadPoint, trailDistanceMeters } from '@/geo';
+import {
+    haversineMeters,
+    bearingDegrees,
+    lookAheadPoint,
+    trailDistanceMeters,
+    foldBackTrack,
+} from '@/geo';
 import {
     createNavigationService,
     createCompassService,
@@ -390,14 +396,57 @@ function setStatusError(root: HTMLElement, message: string, options?: { retry?: 
 }
 
 function enableActionButtons(root: HTMLElement): void {
-    const takeBack = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
     const saveRoute = root.querySelector<HTMLButtonElement>('#btn-save-route');
     const markLandmark = root.querySelector<HTMLButtonElement>('#btn-mark-landmark');
     const newRoute = root.querySelector<HTMLButtonElement>('#btn-new-route');
-    if (takeBack) takeBack.disabled = false;
     if (saveRoute) saveRoute.disabled = false;
     if (markLandmark) markLandmark.disabled = false;
     if (newRoute) newRoute.disabled = false;
+}
+
+/** A walk shorter than this is not worth guiding back along, nor keeping. */
+const MIN_ROUTE_METERS = 20;
+
+/** How many automatically saved walks are kept before the oldest are dropped. */
+const MAX_AUTO_ROUTES = 20;
+
+/** "Take me back" only makes sense once there is some walk to go back along. */
+function updateTakeBackAvailability(root: HTMLElement, totalMeters: number): void {
+    const takeBack = root.querySelector<HTMLButtonElement>('#btn-take-me-back');
+    if (takeBack) takeBack.disabled = totalMeters < MIN_ROUTE_METERS;
+}
+
+/** Finish the current walk: keep it in Saved routes under a dated name, then clear it. */
+async function archiveSession(): Promise<void> {
+    const session = await getSession();
+    const crumbs = session?.breadcrumbs ?? [];
+    const distance = trailDistanceMeters(crumbs);
+    if (crumbs.length >= 2 && distance >= MIN_ROUTE_METERS) {
+        const started = new Date(crumbs[0].timestamp);
+        const name = `Walk ${started.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}, ${started.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+        await saveRoute({
+            id: `route-${String(Date.now())}`,
+            name,
+            date: crumbs[0].timestamp,
+            distance,
+            breadcrumbCount: crumbs.length,
+            breadcrumbs: crumbs,
+            landmarkCount: crumbs.filter(b => b.label).length,
+            auto: true,
+        });
+        await pruneAutoSavedRoutes().catch(() => {});
+    }
+    await clearSession();
+}
+
+/** Keep only the newest MAX_AUTO_ROUTES automatically saved walks; named saves are never dropped. */
+async function pruneAutoSavedRoutes(): Promise<void> {
+    const routes = await listRoutes();
+    const stale = routes
+        .filter(r => r.auto === true)
+        .sort((a, b) => b.date - a.date)
+        .slice(MAX_AUTO_ROUTES);
+    for (const route of stale) await deleteRoute(route.id);
 }
 
 export function mountNavigationView(root: HTMLElement): void {
@@ -861,8 +910,8 @@ export function switchToNavigationView(
                 leaveNavigation();
                 return;
             }
-            // The walk is over: start fresh next time rather than resuming this trail
-            clearSession()
+            // The walk is over: keep it in Saved routes, and start fresh next time
+            archiveSession()
                 .catch(() => {})
                 .finally(leaveNavigation);
         });
@@ -990,7 +1039,8 @@ export function switchToNavigationView(
             if (followMode) {
                 nav.loadForward(breadcrumbs);
             } else {
-                nav.load(breadcrumbs);
+                // Already heading home without pressing the button: only the way out remains
+                nav.load(foldBackTrack(breadcrumbs));
             }
 
             // Render the trail in exactly the order the navigation service follows it
@@ -2054,11 +2104,11 @@ export function startRecording(root: HTMLElement): void {
             newRouteBtn.addEventListener('click', () => {
                 openConfirmDialog(
                     'Start a new route?',
-                    'This clears the current unsaved route and starts recording from here.',
+                    'This finishes the current walk (it stays in Saved routes) and starts recording from here.',
                     'New route',
                     () => {
                         cleanupRecording();
-                        clearSession()
+                        archiveSession()
                             .catch(() => {
                                 updateRouteQuality(
                                     root,
@@ -2088,7 +2138,7 @@ export function startRecording(root: HTMLElement): void {
                     trailDistanceMeters(session.breadcrumbs)
                 );
                 if (!keep) {
-                    await clearSession();
+                    await archiveSession();
                     return;
                 }
             }
@@ -2100,6 +2150,7 @@ export function startRecording(root: HTMLElement): void {
             setStatusRecording(root);
             ensureRecordingActionsWired();
             enableActionButtons(root);
+            updateTakeBackAvailability(root, totalMeters);
             updateRouteQuality(root, 'Continuing your previous route. Use New route to reset.');
             updateStats(
                 root,
@@ -2159,6 +2210,7 @@ export function startRecording(root: HTMLElement): void {
                 totalMeters += haversineMeters(lastBreadcrumb, breadcrumb);
             }
             lastBreadcrumb = breadcrumb;
+            updateTakeBackAvailability(root, totalMeters);
 
             if (breadcrumb.accuracy > 20) {
                 updateRouteQuality(

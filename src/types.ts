@@ -25,4 +25,6 @@ export interface SavedRoute {
     breadcrumbCount: number;
     breadcrumbs: Breadcrumb[];
     landmarkCount?: number;
+    /** Saved automatically when a walk finished; the oldest of these are dropped past a cap. */
+    auto?: boolean;
 }

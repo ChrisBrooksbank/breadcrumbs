@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     bearingDegrees,
     closestPointOnSegment,
+    foldBackTrack,
     haversineMeters,
     lookAheadPoint,
     pointToSegmentMeters,
@@ -298,5 +299,25 @@ describe('simplifyPolyline', () => {
     it('copes with a very long trail without overflowing the stack', () => {
         const path = Array.from({ length: 20_000 }, (_, i) => local(i % 2 === 0 ? 0 : 50, i));
         expect(simplifyPolyline(path, 1).length).toBeGreaterThan(2);
+    });
+});
+
+describe('foldBackTrack', () => {
+    const out = Array.from({ length: 11 }, (_, i) => local(0, i * 50)); // 500 m north
+
+    it('leaves a plain outward walk alone', () => {
+        expect(foldBackTrack(out)).toEqual(out);
+    });
+
+    it('drops the leg already walked back, keeping the way out from where they are', () => {
+        const trail = [...out, local(3, 450), local(3, 400), local(3, 350)];
+        const folded = foldBackTrack(trail);
+        expect(folded.length).toBeLessThan(trail.length);
+        expect(haversineMeters(folded[folded.length - 1], local(0, 350))).toBeLessThan(60);
+    });
+
+    it('ignores a little jitter at the end', () => {
+        const trail = [...out, local(2, 495), local(1, 500)];
+        expect(foldBackTrack(trail)).toEqual(trail);
     });
 });
