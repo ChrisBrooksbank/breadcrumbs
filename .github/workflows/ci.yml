@@ -38,3 +38,30 @@ jobs:
 
             - name: Security audit
               run: npm audit --audit-level=high
+
+    # Publish only once every check above has passed, and only from main
+    deploy:
+        needs: check
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        concurrency: deploy-production
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: '20'
+                  cache: 'npm'
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Build
+              run: npm run build
+
+            - name: Deploy to Netlify
+              run: npx --yes netlify-cli@17 deploy --prod --dir=dist --site "$NETLIFY_SITE_ID" --message "$GITHUB_SHA"
+              env:
+                  NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+                  NETLIFY_SITE_ID: a095b5cd-77ce-4166-a838-fd7a0541fd4b
